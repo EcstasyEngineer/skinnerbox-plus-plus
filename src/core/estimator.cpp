@@ -20,6 +20,7 @@ double clamp01(double v) { return std::max(0.0, std::min(1.0, v)); }
 // word is part of the hike, not the end of it.
 void FlowEstimator::ingest_insert(double now_s, uint32_t chars) {
     slices_.push_back({now_s, chars, 0});
+    total_inserted_ += chars;
     if (last_activity_s_ < 0.0 || now_s - last_activity_s_ > cfg_.grace_seconds)
         burst_start_s_ = now_s;
     last_activity_s_ = now_s;
@@ -113,6 +114,7 @@ AmbientState FlowEstimator::tick(double now_s, bool focused) {
     state_.burst_seconds = std::max(0.0, burst);
     state_.idle_seconds = std::min(idle, 1e6);
     state_.focus_losses = static_cast<uint32_t>(focus_losses_.size());
+    state_.total_inserted = total_inserted_;
     // repetition/entropy/stall_frac/gate_ok are filled by the engine.
     return state_;
 }

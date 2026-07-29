@@ -46,9 +46,10 @@ private:
     bool eligible_ = false;           // VI timer has matured, awaiting boundary
     double last_delivery_s_ = -1e9;   // last non-withheld delivery
     Regime prev_regime_ = Regime::Drafting;
-    // Stall-recovery tracking.
+    // Stall-recovery tracking: baseline of the monotonic insert counter at the
+    // moment the stall ended, so only fresh characters count.
     double recovery_started_s_ = -1.0;
-    double recovery_accum_chars_ = 0.0;
+    uint64_t recovery_baseline_chars_ = 0;
 };
 
 } // namespace sbpp

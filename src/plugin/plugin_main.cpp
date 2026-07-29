@@ -93,10 +93,19 @@ void load_config() {
         read_ini_double(L"gate", L"slop_stall_frac_max", d.slop_stall_frac_max);
     g_cfg.gate_min_chars = read_ini_double(L"gate", L"gate_min_chars", d.gate_min_chars);
     g_cfg.visual_enabled = read_ini_double(L"channels", L"visual", 1) != 0;
-    g_cfg.audio_enabled = read_ini_double(L"channels", L"audio", 1) != 0;
+    g_cfg.audio_enabled = read_ini_double(L"channels", L"audio", 0) != 0;
     g_cfg.statusbar_enabled = read_ini_double(L"channels", L"statusbar", 1) != 0;
+    g_cfg.statusbar_verbose =
+        read_ini_double(L"channels", L"statusbar_verbose", 0) != 0;
     g_cfg.bloom_ms =
         static_cast<uint32_t>(read_ini_double(L"channels", L"bloom_ms", d.bloom_ms));
+    g_cfg.bloom_lift = read_ini_double(L"channels", L"bloom_lift", d.bloom_lift);
+    g_cfg.message_ms = static_cast<uint32_t>(
+        read_ini_double(L"channels", L"message_ms", d.message_ms));
+    g_cfg.micro_reward_enabled =
+        read_ini_double(L"rewards", L"micro_reward", 1) != 0;
+    g_cfg.recovery_reward_enabled =
+        read_ini_double(L"rewards", L"recovery_reward", 1) != 0;
     g_cfg.debug_telemetry = read_ini_double(L"telemetry", L"debug", 0) != 0;
     g_cfg.mcp_enabled = read_ini_double(L"mcp", L"enabled", 0) != 0;
     g_cfg.mcp_max_intensity =
@@ -137,7 +146,15 @@ void persist_config() {
     write_ini_double(L"channels", L"visual", g_cfg.visual_enabled ? 1 : 0);
     write_ini_double(L"channels", L"audio", g_cfg.audio_enabled ? 1 : 0);
     write_ini_double(L"channels", L"statusbar", g_cfg.statusbar_enabled ? 1 : 0);
+    write_ini_double(L"channels", L"statusbar_verbose",
+                     g_cfg.statusbar_verbose ? 1 : 0);
     write_ini_double(L"channels", L"bloom_ms", g_cfg.bloom_ms);
+    write_ini_double(L"channels", L"bloom_lift", g_cfg.bloom_lift);
+    write_ini_double(L"channels", L"message_ms", g_cfg.message_ms);
+    write_ini_double(L"rewards", L"micro_reward",
+                     g_cfg.micro_reward_enabled ? 1 : 0);
+    write_ini_double(L"rewards", L"recovery_reward",
+                     g_cfg.recovery_reward_enabled ? 1 : 0);
     write_ini_double(L"telemetry", L"debug", g_cfg.debug_telemetry ? 1 : 0);
     write_ini_double(L"mcp", L"enabled", g_cfg.mcp_enabled ? 1 : 0);
     write_ini_double(L"mcp", L"max_intensity", g_cfg.mcp_max_intensity);

@@ -42,6 +42,11 @@ private:
     unsigned long long bloom_until_ms_ = 0;
     double displayed_t_ = 0.0; // smoothed tint position, no square waves
     std::wstring last_status_;
+    // Plain-language explanation of the last reward, shown in the status bar
+    // so a reward is never unexplained: an illegible reward is either a
+    // legibility bug or a bad heuristic, and both need to be visible.
+    std::wstring message_;
+    unsigned long long message_until_ms_ = 0;
 };
 
 } // namespace sbpp

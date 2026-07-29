@@ -13,7 +13,11 @@ std::optional<RewardIntent> RewardPolicy::emit(double now_s, RewardClass kind,
                                                double confidence, double dose) {
     std::uniform_real_distribution<double> u(0.0, 1.0);
     const bool withheld = u(rng_) < cfg_.withhold_probability;
-    if (!withheld) last_delivery_s_ = now_s;
+    // Cooldown advances in BOTH arms. If only delivered rewards reset it, the
+    // withheld arm becomes eligible again sooner and the two arms no longer
+    // share a treatment history — the counterfactual comparison is then
+    // confounded by schedule, not just by the reward.
+    last_delivery_s_ = now_s;
     RewardIntent intent;
     intent.kind = kind;
     intent.confidence = confidence;
@@ -31,7 +35,11 @@ std::optional<RewardIntent> RewardPolicy::tick(double now_s, double dt_s,
     // --- stall recovery tracking ---
     if (prev_regime_ == Regime::Stall && state.regime != Regime::Stall) {
         recovery_started_s_ = now_s;
-        recovery_accum_chars_ = 0.0;
+        // Baseline the monotonic counter: only characters typed AFTER the
+        // stall ended can count toward recovery. (Integrating net_rate_cpm
+        // here let pre-stall typing, still inside its 60 s window, qualify a
+        // recovery that never happened.)
+        recovery_baseline_chars_ = state.total_inserted;
     }
     if (state.regime == Regime::Stall) recovery_started_s_ = -1.0;
     std::optional<RewardIntent> result;
@@ -39,8 +47,10 @@ std::optional<RewardIntent> RewardPolicy::tick(double now_s, double dt_s,
         if (now_s - recovery_started_s_ > cfg_.recovery_window_s) {
             recovery_started_s_ = -1.0; // window closed without qualifying
         } else {
-            recovery_accum_chars_ += state.net_rate_cpm * dt_s / 60.0;
-            if (recovery_accum_chars_ >= cfg_.recovery_chars &&
+            const double fresh_chars = static_cast<double>(
+                state.total_inserted - recovery_baseline_chars_);
+            if (cfg_.recovery_reward_enabled &&
+                fresh_chars >= cfg_.recovery_chars &&
                 state.gate_ok && // conjunction: recovery must be real content
                 now_s - last_delivery_s_ >= cfg_.min_cooldown_s) {
                 recovery_started_s_ = -1.0;
@@ -69,7 +79,8 @@ std::optional<RewardIntent> RewardPolicy::tick(double now_s, double dt_s,
         const bool at_boundary =
             state.idle_seconds >= 1.0 &&
             state.idle_seconds <= cfg_.burst_gap_seconds + 2.0;
-        if (!result && eligible_ && at_boundary && state.gate_ok &&
+        if (!result && cfg_.micro_reward_enabled && eligible_ && at_boundary &&
+            state.gate_ok &&
             now_s - last_delivery_s_ >= cfg_.min_cooldown_s) {
             eligible_ = false;
             result = emit(now_s, RewardClass::MicroReward, "flow_vi_reward",

@@ -51,6 +51,11 @@ struct AmbientState {
     double entropy = 0.0;
     double stall_frac = 0.0;
     bool gate_ok = false;
+    // Monotonic count of characters inserted this session. Policies that need
+    // "chars since X" must diff this — deriving it from net_rate_cpm reads a
+    // trailing 60 s window and lets pre-event typing count toward post-event
+    // progress.
+    uint64_t total_inserted = 0;
 };
 
 inline const char* regime_name(Regime r) {

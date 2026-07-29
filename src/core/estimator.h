@@ -43,6 +43,7 @@ private:
     double flow_ = 0.0;               // EWMA accumulator
     double last_activity_s_ = -1.0;   // last insert/delete timestamp
     double burst_start_s_ = -1.0;     // start of current typing burst
+    uint64_t total_inserted_ = 0;     // monotonic session insert count
 };
 
 } // namespace sbpp

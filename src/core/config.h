@@ -37,10 +37,19 @@ struct Config {
     double gate_min_chars = 80.0;      // less recent text than this = no
                                        // content evidence = gate fails closed
 
+    // --- reward types (each independently switchable; a type that isn't
+    // earning its place should be turned off, not tolerated) ---
+    bool micro_reward_enabled = true;
+    bool recovery_reward_enabled = true;
+
     // --- channels ---
+    // Sound and sudden brightness changes are OUT by design: they interrupt
+    // reading, which is the opposite of the goal. Reward legibility comes from
+    // the status-bar message plus the slow color ramp.
     bool visual_enabled = true;
-    bool audio_enabled = true;
+    bool audio_enabled = false;
     bool statusbar_enabled = true;
+    bool statusbar_verbose = false; // facet sub-items; off = just the meter
 
     // --- MCP hardware output (default-off; must be armed per session) ---
     bool mcp_enabled = false;
@@ -54,8 +63,10 @@ struct Config {
     // production feature; the status bar shows REC while it's on. ---
     bool debug_telemetry = false;
 
-    // Phasic visual bloom duration.
+    // Phasic tint lift and how long the reward message stays legible.
     uint32_t bloom_ms = 8000;
+    double bloom_lift = 0.12;      // added tint above tonic, NOT a jump-to
+    uint32_t message_ms = 25000;   // status-bar reward message dwell
 };
 
 } // namespace sbpp
