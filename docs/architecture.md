@@ -49,11 +49,14 @@ escalation.
 
 ## Estimator notes
 
-The flow score is deliberately a *conjunction*: momentum AND burst persistence,
-dragged down by destructive-editing ratio and focus departures, starved by
-idleness. Single-signal scores Goodhart instantly (reward WPM → get fast slop).
-Regime hysteresis (0.70 enter / 0.50 exit) prevents boundary flutter from
-double-firing the policy.
+The flow score is currently a **weighted blend** (momentum + burst persistence,
+penalized by destructive-editing ratio and focus departures, starved by
+idleness) — and an adversarial probe proved the blend is spoofable: deliberate
+low-content filler pinned it at 1.00 (see experiment-01-salience.md). Turning
+reward eligibility into a true conjunction with must-pass content gates is
+issue #3, and until that lands the score should be read as "typing momentum,"
+not "flow." Regime hysteresis (0.70 enter / 0.50 exit) prevents boundary
+flutter from double-firing the policy.
 
 ## Policy notes
 
