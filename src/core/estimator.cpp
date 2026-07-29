@@ -113,8 +113,25 @@ AmbientState FlowEstimator::tick(double now_s, bool focused) {
     state_.deletion_ratio = deletion_ratio;
     state_.burst_seconds = std::max(0.0, burst);
     state_.idle_seconds = std::min(idle, 1e6);
+    // Earned restoration: a stall zeroes it; it climbs only with cumulative
+    // ACTIVE time (not wall-clock, not a single burst), so sitting idle or
+    // typing one qualifying sentence doesn't buy the warmth back.
+    const double dt = (last_tick_s_ < 0.0) ? 0.0 : now_s - last_tick_s_;
+    last_tick_s_ = now_s;
+    if (regime == Regime::Stall) {
+        restoration_ = 0.0;
+        active_since_stall_s_ = 0.0;
+    } else if (restoration_ < 1.0) {
+        const bool actively_writing =
+            idle <= cfg_.burst_gap_seconds && net_cpm > 0.0;
+        if (actively_writing) active_since_stall_s_ += dt;
+        restoration_ = std::min(
+            1.0, active_since_stall_s_ / std::max(1.0, cfg_.restore_seconds));
+    }
+
     state_.focus_losses = static_cast<uint32_t>(focus_losses_.size());
     state_.total_inserted = total_inserted_;
+    state_.restoration = restoration_;
     // repetition/entropy/stall_frac/gate_ok are filled by the engine.
     return state_;
 }

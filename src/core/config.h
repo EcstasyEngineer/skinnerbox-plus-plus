@@ -26,7 +26,15 @@ struct Config {
     double mean_reward_interval_s = 420.0; // variable-interval average (7 min)
     double min_cooldown_s = 240.0;         // hard floor between deliveries
     double min_flow_hold_s = 90.0;         // must hold FLOW this long to qualify
-    double withhold_probability = 0.15;    // counterfactual no-reward fraction
+    double withhold_probability = 0.15;    // per-moment counterfactual fraction
+    // Block randomization: when true, the WHOLE SESSION is randomly assigned
+    // to the delivery or withhold arm (probability below) instead of flipping
+    // per moment. Per-moment sampling needs ~250-1000 qualifying moments to
+    // detect a moderate effect (~150-300 sessions at this event rate); session
+    // blocks give one clean paired observation per session, which is the only
+    // version of this experiment that finishes.
+    bool withhold_block_mode = true;
+    double withhold_block_probability = 0.5;
     double recovery_chars = 120.0;   // chars within recovery window after stall...
     double recovery_window_s = 60.0; // ...that count as a STALL recovery
 
@@ -51,16 +59,32 @@ struct Config {
     bool statusbar_enabled = true;
     bool statusbar_verbose = false; // facet sub-items; off = just the meter
 
+    // --- earned tonic restoration ---
+    // After a stall the environment stays neutral and warms back only as
+    // sustained work accumulates: restoration reaches full after this many
+    // seconds of active writing, and decays if the writer stalls again. This
+    // is what replaces paying out for the first N chars after a pause.
+    double restore_seconds = 90.0;
+
     // --- MCP hardware output (default-off; must be armed per session) ---
     bool mcp_enabled = false;
     double mcp_max_intensity = 0.30; // client ceiling; backend caps too
     uint32_t mcp_max_seconds = 3;    // per-delivery auto-stop bound
     int mcp_channel = 0;
 
+    // --- Intiface / Buttplug v4 output (default-off) ---
+    // Buttplug has NO server-side intensity cap and NO per-command duration:
+    // a value persists until changed, so the client-side ceiling here is the
+    // only cap, and this plugin owns the stop. The protocol's ping timeout is
+    // the dead-man's switch — if we stop pinging, the server stops devices.
+    bool intiface_enabled = false;
+    double intiface_max_intensity = 0.30; // fraction of the device's own range
+    uint32_t intiface_ms = 1200;          // how long a reward buzz lasts
+
     // --- debug telemetry (default-off, one switch): per-event raw log
-    // INCLUDING typed text and buffer switches — a keylogger, for offline
-    // estimator debugging and reverse-engineering. Experiment tooling, not a
-    // production feature; the status bar shows REC while it's on. ---
+    // INCLUDING typed text and buffer switches, for offline estimator
+    // debugging and reverse-engineering. Experiment tooling, not a production
+    // feature; the status bar shows REC while it's on. ---
     bool debug_telemetry = false;
 
     // Phasic tint lift and how long the reward message stays legible.

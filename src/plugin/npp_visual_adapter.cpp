@@ -63,17 +63,17 @@ void NppVisualAdapter::set_statusbar(const AmbientState& s) {
         // A reward happened: say what and why, in words, where the eye can
         // find it later — never a flash that interrupts reading.
         swprintf(text, 224, L"%hs%s %.2f  ·  %s",
-                 cfg_.debug_telemetry ? "● REC  " : "", bar, s.flow,
+                 cfg_.debug_telemetry ? "REC  " : "", bar, s.flow,
                  message_.c_str());
     } else if (cfg_.statusbar_verbose) {
         swprintf(text, 224,
                  L"%hs%s %.2f %hs%hs | %.0f cpm  del %.2f  burst %.0fs",
-                 cfg_.debug_telemetry ? "● REC  " : "", bar, s.flow,
+                 cfg_.debug_telemetry ? "REC  " : "", bar, s.flow,
                  regime_name(s.regime), s.gate_ok ? "" : " ·gate x",
                  s.net_rate_cpm, s.deletion_ratio, s.burst_seconds);
     } else {
         swprintf(text, 224, L"%hs%s %.2f",
-                 cfg_.debug_telemetry ? "● REC  " : "", bar, s.flow);
+                 cfg_.debug_telemetry ? "REC  " : "", bar, s.flow);
     }
     if (last_status_ == text) return;
     last_status_ = text;
@@ -90,8 +90,10 @@ void NppVisualAdapter::ambient(const AmbientState& s) {
         // PAUSED renders neutral (base color): the environment stops judging
         // while the writer thinks — feedback during an unresolved pause is
         // reinforcement that can't be retracted.
+        // Tonic scales by earned restoration: after a stall the environment
+        // starts neutral and warms back only as sustained work accumulates.
         double target = 0.0;
-        if (s.regime != Regime::Paused) target = 0.35 * s.flow;
+        if (s.regime != Regime::Paused) target = 0.35 * s.flow * s.restoration;
         // A reward lifts the tint slightly ABOVE where it already was, rather
         // than jumping to a fixed bright value: continuous with the ramp, so
         // it reads as "a bit warmer", never as a flash.

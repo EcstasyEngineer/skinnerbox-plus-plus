@@ -20,6 +20,7 @@ cl /nologo /W4 /EHsc /std:c++17 /O2 /utf-8 /DUNICODE /D_UNICODE /DNOMINMAX ^
    src\core\estimator.cpp src\core\policy.cpp src\core\content.cpp ^
    src\adapters\log_adapter.cpp src\adapters\audio_adapter.cpp ^
    src\adapters\raw_log.cpp src\adapters\mcp_adapter.cpp ^
+   src\adapters\intiface_adapter.cpp ^
    src\plugin\npp_visual_adapter.cpp src\plugin\plugin_main.cpp ^
    user32.lib shell32.lib winmm.lib winhttp.lib
 if errorlevel 1 exit /b 1

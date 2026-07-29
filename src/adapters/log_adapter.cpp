@@ -20,6 +20,17 @@ LogAdapter::LogAdapter(const std::wstring& path) {
 
 LogAdapter::~LogAdapter() { shutdown(); }
 
+void LogAdapter::note_session_arm(bool block_mode, bool withheld) {
+    if (!file_) return;
+    char buf[160];
+    snprintf(buf, sizeof(buf),
+             "{\"event\":\"session_arm\",\"ts\":\"%s\",\"mode\":\"%s\","
+             "\"arm\":\"%s\"}",
+             timestamp().c_str(), block_mode ? "block" : "per_moment",
+             withheld ? "withheld" : "delivered");
+    write_line(buf);
+}
+
 std::string LogAdapter::timestamp() {
     std::time_t t = std::time(nullptr);
     std::tm tm{};
@@ -77,10 +88,11 @@ void LogAdapter::ambient(const AmbientState& s) {
              "\"net_cpm\":%.1f,\"del_ratio\":%.3f,\"burst_s\":%.1f,"
              "\"idle_s\":%.1f,\"focus_losses\":%u,"
              "\"repetition\":%.3f,\"entropy\":%.2f,\"stall_frac\":%.3f,"
-             "\"gate_ok\":%s}",
+             "\"gate_ok\":%s,\"restoration\":%.2f}",
              timestamp().c_str(), s.flow, regime_name(s.regime), s.net_rate_cpm,
              s.deletion_ratio, s.burst_seconds, s.idle_seconds, s.focus_losses,
-             s.repetition, s.entropy, s.stall_frac, s.gate_ok ? "true" : "false");
+             s.repetition, s.entropy, s.stall_frac, s.gate_ok ? "true" : "false",
+             s.restoration);
     write_line(buf);
 }
 

@@ -20,6 +20,9 @@ public:
     explicit LogAdapter(const std::wstring& path);
     ~LogAdapter() override;
 
+    // Record the session's experiment arm at the top of the log.
+    void note_session_arm(bool block_mode, bool withheld);
+
     const char* name() const override { return "log"; }
     void ambient(const AmbientState& state) override;
     void deliver(const RewardIntent& intent) override;

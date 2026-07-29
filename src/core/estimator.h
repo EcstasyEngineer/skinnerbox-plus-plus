@@ -44,6 +44,9 @@ private:
     double last_activity_s_ = -1.0;   // last insert/delete timestamp
     double burst_start_s_ = -1.0;     // start of current typing burst
     uint64_t total_inserted_ = 0;     // monotonic session insert count
+    double restoration_ = 1.0;        // earned tonic restoration, 0-1
+    double active_since_stall_s_ = 0.0; // cumulative active time since a stall
+    double last_tick_s_ = -1.0;       // for restoration's dt
 };
 
 } // namespace sbpp

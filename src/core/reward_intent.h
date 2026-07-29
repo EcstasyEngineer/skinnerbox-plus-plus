@@ -56,6 +56,11 @@ struct AmbientState {
     // trailing 60 s window and lets pre-event typing count toward post-event
     // progress.
     uint64_t total_inserted = 0;
+    // Earned tonic restoration, 0-1. Drops to 0 on a stall and climbs back as
+    // sustained active writing accumulates; adapters multiply their tonic
+    // feedback by it. Never granted retroactively — this is how "came back and
+    // kept going" gets acknowledged without a phasic payout for the landing.
+    double restoration = 1.0;
 };
 
 inline const char* regime_name(Regime r) {

@@ -12,7 +12,9 @@ std::optional<RewardIntent> RewardPolicy::emit(double now_s, RewardClass kind,
                                                const char* reason,
                                                double confidence, double dose) {
     std::uniform_real_distribution<double> u(0.0, 1.0);
-    const bool withheld = u(rng_) < cfg_.withhold_probability;
+    const bool withheld = cfg_.withhold_block_mode
+                              ? session_withheld_
+                              : u(rng_) < cfg_.withhold_probability;
     // Cooldown advances in BOTH arms. If only delivered rewards reset it, the
     // withheld arm becomes eligible again sooner and the two arms no longer
     // share a treatment history — the counterfactual comparison is then

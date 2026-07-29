@@ -26,6 +26,10 @@ public:
         adapters_.push_back(std::move(adapter));
     }
 
+    // Experiment arm for this session (block-randomized withholding).
+    bool session_withheld() const { return policy_.session_withheld(); }
+    bool block_mode() const { return cfg_.withhold_block_mode; }
+
     // text may be null (counts-only host); when present it feeds the lexical
     // content facets that gate rewards.
     void on_insert(double now_s, uint32_t chars, const char* text = nullptr,

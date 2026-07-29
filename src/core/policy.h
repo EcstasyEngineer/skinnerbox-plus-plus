@@ -25,8 +25,18 @@ namespace sbpp {
 // goes unrewarded — counterfactual data for later policy learning.
 class RewardPolicy {
 public:
-    RewardPolicy(const Config& cfg, uint64_t seed)
-        : cfg_(cfg), rng_(seed) {}
+    RewardPolicy(const Config& cfg, uint64_t seed) : cfg_(cfg), rng_(seed) {
+        // Block mode assigns the whole session to one arm up front, so a
+        // session yields one clean paired observation instead of a handful of
+        // per-moment coin flips that never reach power.
+        if (cfg_.withhold_block_mode) {
+            std::uniform_real_distribution<double> u(0.0, 1.0);
+            session_withheld_ = u(rng_) < cfg_.withhold_block_probability;
+        }
+    }
+
+    // Which arm this session was assigned to (block mode only).
+    bool session_withheld() const { return session_withheld_; }
 
     // Called once per tick with the fresh ambient state. Returns an intent for
     // this tick, or nothing. dt_s is the seconds since the previous tick.
@@ -42,6 +52,7 @@ private:
 
     const Config& cfg_;
     std::mt19937_64 rng_;
+    bool session_withheld_ = false;
     double flow_entered_s_ = -1.0;    // when the current FLOW stretch began
     bool eligible_ = false;           // VI timer has matured, awaiting boundary
     double last_delivery_s_ = -1e9;   // last non-withheld delivery

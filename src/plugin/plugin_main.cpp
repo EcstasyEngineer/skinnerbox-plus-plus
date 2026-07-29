@@ -21,6 +21,7 @@
 #include "../core/engine.h"
 #include "../adapters/audio_adapter.h"
 #include "../adapters/log_adapter.h"
+#include "../adapters/intiface_adapter.h"
 #include "../adapters/mcp_adapter.h"
 #include "../adapters/raw_log.h"
 #include "npp_visual_adapter.h"
@@ -43,6 +44,7 @@ bool g_focus_was_here = true;
 std::wstring g_ini_path;
 std::wstring g_log_dir;
 std::wstring g_mcp_endpoint;
+std::wstring g_intiface_url;
 
 double now_s() { return static_cast<double>(GetTickCount64()) / 1000.0; }
 
@@ -106,6 +108,23 @@ void load_config() {
         read_ini_double(L"rewards", L"micro_reward", 1) != 0;
     g_cfg.recovery_reward_enabled =
         read_ini_double(L"rewards", L"recovery_reward", 1) != 0;
+    g_cfg.withhold_block_mode =
+        read_ini_double(L"policy", L"withhold_block_mode", 1) != 0;
+    g_cfg.withhold_block_probability = read_ini_double(
+        L"policy", L"withhold_block_probability", d.withhold_block_probability);
+    g_cfg.restore_seconds =
+        read_ini_double(L"flow", L"restore_seconds", d.restore_seconds);
+    g_cfg.intiface_enabled = read_ini_double(L"intiface", L"enabled", 0) != 0;
+    g_cfg.intiface_max_intensity = read_ini_double(
+        L"intiface", L"max_intensity", d.intiface_max_intensity);
+    g_cfg.intiface_ms = static_cast<uint32_t>(
+        read_ini_double(L"intiface", L"buzz_ms", d.intiface_ms));
+    {
+        wchar_t buf[256];
+        GetPrivateProfileStringW(L"intiface", L"url", L"ws://127.0.0.1:12345",
+                                 buf, 256, g_ini_path.c_str());
+        g_intiface_url = buf;
+    }
     g_cfg.debug_telemetry = read_ini_double(L"telemetry", L"debug", 0) != 0;
     g_cfg.mcp_enabled = read_ini_double(L"mcp", L"enabled", 0) != 0;
     g_cfg.mcp_max_intensity =
@@ -155,6 +174,16 @@ void persist_config() {
                      g_cfg.micro_reward_enabled ? 1 : 0);
     write_ini_double(L"rewards", L"recovery_reward",
                      g_cfg.recovery_reward_enabled ? 1 : 0);
+    write_ini_double(L"policy", L"withhold_block_mode",
+                     g_cfg.withhold_block_mode ? 1 : 0);
+    write_ini_double(L"policy", L"withhold_block_probability",
+                     g_cfg.withhold_block_probability);
+    write_ini_double(L"flow", L"restore_seconds", g_cfg.restore_seconds);
+    write_ini_double(L"intiface", L"enabled", g_cfg.intiface_enabled ? 1 : 0);
+    write_ini_double(L"intiface", L"max_intensity", g_cfg.intiface_max_intensity);
+    write_ini_double(L"intiface", L"buzz_ms", g_cfg.intiface_ms);
+    WritePrivateProfileStringW(L"intiface", L"url", g_intiface_url.c_str(),
+                               g_ini_path.c_str());
     write_ini_double(L"telemetry", L"debug", g_cfg.debug_telemetry ? 1 : 0);
     write_ini_double(L"mcp", L"enabled", g_cfg.mcp_enabled ? 1 : 0);
     write_ini_double(L"mcp", L"max_intensity", g_cfg.mcp_max_intensity);
@@ -194,7 +223,11 @@ void start_engine() {
     const uint64_t seed = GetTickCount64() ^ (static_cast<uint64_t>(GetCurrentProcessId()) << 32);
     const std::wstring base = session_base_name();
     g_engine = std::make_unique<sbpp::FlowEngine>(g_cfg, seed);
-    g_engine->add_adapter(std::make_unique<sbpp::LogAdapter>(base + L".jsonl"));
+    {
+        auto log = std::make_unique<sbpp::LogAdapter>(base + L".jsonl");
+        log->note_session_arm(g_engine->block_mode(), g_engine->session_withheld());
+        g_engine->add_adapter(std::move(log));
+    }
     if (g_cfg.debug_telemetry)
         g_rawlog = std::make_unique<sbpp::RawLog>(base + L".raw.jsonl",
                                                   /*capture_text=*/true);
@@ -202,6 +235,13 @@ void start_engine() {
         g_engine->add_adapter(std::make_unique<sbpp::NppVisualAdapter>(g_npp, g_cfg));
     if (g_cfg.audio_enabled)
         g_engine->add_adapter(std::make_unique<sbpp::AudioAdapter>());
+    if (g_cfg.intiface_enabled) {
+        sbpp::IntifaceAdapter::Settings is;
+        is.url.assign(g_intiface_url.begin(), g_intiface_url.end());
+        is.max_intensity = g_cfg.intiface_max_intensity;
+        is.buzz_ms = g_cfg.intiface_ms;
+        g_engine->add_adapter(std::make_unique<sbpp::IntifaceAdapter>(is));
+    }
     if (g_cfg.mcp_enabled) {
         sbpp::McpAdapter::Settings ms;
         ms.endpoint.assign(g_mcp_endpoint.begin(), g_mcp_endpoint.end());
@@ -320,7 +360,7 @@ extern "C" __declspec(dllexport) FuncItem* getFuncsArray(int* count) {
     set(g_funcs[1], L"Reload config", cmd_reload_config, false);
     set(g_funcs[2], L"Open config", cmd_open_config, false);
     set(g_funcs[3], L"Open session logs", cmd_open_logs, false);
-    set(g_funcs[4], L"Debug telemetry (keylogger)", cmd_toggle_debug,
+    set(g_funcs[4], L"Debug telemetry (records typed text)", cmd_toggle_debug,
         g_cfg.debug_telemetry);
     set(g_funcs[5], L"About", cmd_about, false);
     *count = kNbFunc;
