@@ -61,7 +61,7 @@ void NppVisualAdapter::set_statusbar(const AmbientState& s) {
     wchar_t text[192];
     swprintf(text, 192,
              L"%hsSB++ %s %.2f %hs%hs | %.0f cpm  del %.2f  burst %.0fs",
-             cfg_.capture_text && cfg_.raw_log_enabled ? "● REC  " : "",
+             cfg_.debug_telemetry ? "● REC  " : "",
              bar, s.flow, regime_name(s.regime),
              s.gate_ok ? "" : " ·gate✗", s.net_rate_cpm,
              s.deletion_ratio, s.burst_seconds);

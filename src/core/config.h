@@ -42,10 +42,11 @@ struct Config {
     bool audio_enabled = true;
     bool statusbar_enabled = true;
 
-    // --- telemetry (both default-off: raw is fine-grained behavior data,
-    // capture_text additionally records typed document content) ---
-    bool raw_log_enabled = false;
-    bool capture_text = false;
+    // --- debug telemetry (default-off, one switch): per-event raw log
+    // INCLUDING typed text and buffer switches — a keylogger, for offline
+    // estimator debugging and reverse-engineering. Experiment tooling, not a
+    // production feature; the status bar shows REC while it's on. ---
+    bool debug_telemetry = false;
 
     // Phasic visual bloom duration.
     uint32_t bloom_ms = 8000;
