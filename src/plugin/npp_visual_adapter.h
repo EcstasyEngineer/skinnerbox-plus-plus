@@ -40,6 +40,7 @@ private:
     int base_caretline_visible_ = 0;
     COLORREF last_applied_ = 0xFFFFFFFF;
     unsigned long long bloom_until_ms_ = 0;
+    double displayed_t_ = 0.0; // smoothed tint position, no square waves
     std::wstring last_status_;
 };
 

@@ -58,10 +58,12 @@ void NppVisualAdapter::set_statusbar(const AmbientState& s) {
     wchar_t bar[8] = L"";
     for (int i = 0; i < 5; ++i) bar[i] = i < filled ? L'▰' : L'▱';
     bar[5] = L'\0';
+    const bool blooming = GetTickCount64() < bloom_until_ms_;
     wchar_t text[192];
     swprintf(text, 192,
-             L"%hsSB++ %s %.2f %hs%hs | %.0f cpm  del %.2f  burst %.0fs",
+             L"%hs%hsSB++ %s %.2f %hs%hs | %.0f cpm  del %.2f  burst %.0fs",
              cfg_.debug_telemetry ? "● REC  " : "",
+             blooming ? "★ REWARD  " : "",
              bar, s.flow, regime_name(s.regime),
              s.gate_ok ? "" : " ·gate✗", s.net_rate_cpm,
              s.deletion_ratio, s.burst_seconds);
@@ -80,10 +82,13 @@ void NppVisualAdapter::ambient(const AmbientState& s) {
         // PAUSED renders neutral (base color): the environment stops judging
         // while the writer thinks — feedback during an unresolved pause is
         // reinforcement that can't be retracted.
-        double t = 0.0;
-        if (blooming) t = 0.60;
-        else if (s.regime != Regime::Paused) t = 0.35 * s.flow;
-        apply_color(lerp_color(base_color_, wr, wg, wb, t));
+        double target = 0.0;
+        if (blooming) target = 0.60;
+        else if (s.regime != Regime::Paused) target = 0.35 * s.flow;
+        // Exponential smoothing: every transition (bloom in/out, pause
+        // neutral, flow moves) ramps over a few seconds — no square waves.
+        displayed_t_ += 0.30 * (target - displayed_t_);
+        apply_color(lerp_color(base_color_, wr, wg, wb, displayed_t_));
     }
     set_statusbar(s);
 }
@@ -91,10 +96,9 @@ void NppVisualAdapter::ambient(const AmbientState& s) {
 void NppVisualAdapter::deliver(const RewardIntent& intent) {
     if (intent.withheld || !cfg_.visual_enabled) return;
     if (intent.kind == RewardClass::SessionSummary) return;
-    BYTE wr, wg, wb;
-    warm_target(base_color_, wr, wg, wb);
+    // The chime is the instant marker; the color ramps in via ambient()'s
+    // smoothing rather than snapping.
     bloom_until_ms_ = GetTickCount64() + intent.max_duration_ms;
-    apply_color(lerp_color(base_color_, wr, wg, wb, 0.60));
 }
 
 void NppVisualAdapter::shutdown() {

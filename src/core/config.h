@@ -42,6 +42,12 @@ struct Config {
     bool audio_enabled = true;
     bool statusbar_enabled = true;
 
+    // --- MCP hardware output (default-off; must be armed per session) ---
+    bool mcp_enabled = false;
+    double mcp_max_intensity = 0.30; // client ceiling; backend caps too
+    uint32_t mcp_max_seconds = 3;    // per-delivery auto-stop bound
+    int mcp_channel = 0;
+
     // --- debug telemetry (default-off, one switch): per-event raw log
     // INCLUDING typed text and buffer switches — a keylogger, for offline
     // estimator debugging and reverse-engineering. Experiment tooling, not a

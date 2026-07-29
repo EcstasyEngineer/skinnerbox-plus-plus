@@ -21,6 +21,7 @@
 #include "../core/engine.h"
 #include "../adapters/audio_adapter.h"
 #include "../adapters/log_adapter.h"
+#include "../adapters/mcp_adapter.h"
 #include "../adapters/raw_log.h"
 #include "npp_visual_adapter.h"
 
@@ -41,6 +42,7 @@ bool g_enabled = false;
 bool g_focus_was_here = true;
 std::wstring g_ini_path;
 std::wstring g_log_dir;
+std::wstring g_mcp_endpoint;
 
 double now_s() { return static_cast<double>(GetTickCount64()) / 1000.0; }
 
@@ -96,6 +98,19 @@ void load_config() {
     g_cfg.bloom_ms =
         static_cast<uint32_t>(read_ini_double(L"channels", L"bloom_ms", d.bloom_ms));
     g_cfg.debug_telemetry = read_ini_double(L"telemetry", L"debug", 0) != 0;
+    g_cfg.mcp_enabled = read_ini_double(L"mcp", L"enabled", 0) != 0;
+    g_cfg.mcp_max_intensity =
+        read_ini_double(L"mcp", L"max_intensity", d.mcp_max_intensity);
+    g_cfg.mcp_max_seconds = static_cast<uint32_t>(
+        read_ini_double(L"mcp", L"max_seconds", d.mcp_max_seconds));
+    g_cfg.mcp_channel =
+        static_cast<int>(read_ini_double(L"mcp", L"channel", d.mcp_channel));
+    {
+        wchar_t buf[256];
+        GetPrivateProfileStringW(L"mcp", L"endpoint", L"http://127.0.0.1:9102/mcp",
+                                 buf, 256, g_ini_path.c_str());
+        g_mcp_endpoint = buf;
+    }
     g_enabled = read_ini_double(L"general", L"enabled", 1) != 0;
 }
 
@@ -124,6 +139,12 @@ void persist_config() {
     write_ini_double(L"channels", L"statusbar", g_cfg.statusbar_enabled ? 1 : 0);
     write_ini_double(L"channels", L"bloom_ms", g_cfg.bloom_ms);
     write_ini_double(L"telemetry", L"debug", g_cfg.debug_telemetry ? 1 : 0);
+    write_ini_double(L"mcp", L"enabled", g_cfg.mcp_enabled ? 1 : 0);
+    write_ini_double(L"mcp", L"max_intensity", g_cfg.mcp_max_intensity);
+    write_ini_double(L"mcp", L"max_seconds", g_cfg.mcp_max_seconds);
+    write_ini_double(L"mcp", L"channel", g_cfg.mcp_channel);
+    WritePrivateProfileStringW(L"mcp", L"endpoint", g_mcp_endpoint.c_str(),
+                               g_ini_path.c_str());
 }
 
 // --------------------------------------------------------------- session ---
@@ -164,6 +185,14 @@ void start_engine() {
         g_engine->add_adapter(std::make_unique<sbpp::NppVisualAdapter>(g_npp, g_cfg));
     if (g_cfg.audio_enabled)
         g_engine->add_adapter(std::make_unique<sbpp::AudioAdapter>());
+    if (g_cfg.mcp_enabled) {
+        sbpp::McpAdapter::Settings ms;
+        ms.endpoint.assign(g_mcp_endpoint.begin(), g_mcp_endpoint.end());
+        ms.max_intensity = g_cfg.mcp_max_intensity;
+        ms.max_seconds = g_cfg.mcp_max_seconds;
+        ms.channel = g_cfg.mcp_channel;
+        g_engine->add_adapter(std::make_unique<sbpp::McpAdapter>(ms));
+    }
     g_timer = SetTimer(nullptr, 0, 1000, timer_proc);
     g_focus_was_here = true;
 }
