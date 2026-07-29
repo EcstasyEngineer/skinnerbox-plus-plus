@@ -32,14 +32,20 @@ public:
     struct Settings {
         std::string url = "ws://127.0.0.1:12345";
         double max_intensity = 0.30; // fraction of each device's advertised max
-        uint32_t buzz_ms = 1200;
+        uint32_t buzz_ms = 2200;     // base sustain of the reward envelope
+        bool flow_vibe = false;      // continuous tonic vibe while in FLOW
+        double flow_vibe_level = 0.5; // ...at this fraction of the cap
     };
 
     explicit IntifaceAdapter(const Settings& s);
     ~IntifaceAdapter() override;
 
     const char* name() const override { return "intiface"; }
-    void ambient(const AmbientState&) override {} // tonic is not sent to hardware
+    // Tonic: only acts when flow_vibe mode is on — holds a steady level while
+    // the FSM is in FLOW. Never blocks the tick thread: if a reward envelope
+    // currently owns the device (mutex held through its sleeps), the update is
+    // skipped and re-asserted on a later tick.
+    void ambient(const AmbientState& state) override;
     void deliver(const RewardIntent& intent) override;
     void shutdown() override;
 
@@ -71,6 +77,7 @@ private:
     Settings cfg_;
     std::mutex mu_;
     std::atomic<double> current_output_{0.0};
+    double tonic_level_ = 0.0; // last tonic level sent (guarded by mu_)
     void* session_ = nullptr;   // HINTERNET
     void* connection_ = nullptr; // HINTERNET
     void* websocket_ = nullptr;  // HINTERNET (WebSocket handle)

@@ -79,6 +79,8 @@ void load_config() {
     g_cfg.slop_bigram_bpc_max =
         read_ini_double(L"gate", L"slop_bigram_bpc_max", d.slop_bigram_bpc_max);
     g_cfg.gate_min_chars = read_ini_double(L"gate", L"gate_min_chars", d.gate_min_chars);
+    g_cfg.vi_reward_enabled =
+        read_ini_double(L"policy", L"vi_reward", d.vi_reward_enabled ? 1 : 0) != 0;
     g_cfg.min_flow_hold_s = read_ini_double(L"policy", L"min_flow_hold_s", d.min_flow_hold_s);
     g_cfg.mean_reward_interval_s =
         read_ini_double(L"policy", L"mean_reward_interval_s", d.mean_reward_interval_s);
@@ -96,6 +98,10 @@ void load_config() {
         L"intiface", L"max_intensity", d.intiface_max_intensity);
     g_cfg.intiface_ms = static_cast<uint32_t>(
         read_ini_double(L"intiface", L"buzz_ms", d.intiface_ms));
+    g_cfg.intiface_flow_vibe =
+        read_ini_double(L"intiface", L"flow_vibe", d.intiface_flow_vibe ? 1 : 0) != 0;
+    g_cfg.intiface_flow_vibe_level = read_ini_double(
+        L"intiface", L"flow_vibe_level", d.intiface_flow_vibe_level);
     {
         wchar_t buf[256];
         GetPrivateProfileStringW(L"intiface", L"url", L"ws://127.0.0.1:12345",
@@ -119,6 +125,7 @@ void persist_config() {
     write_ini_double(L"gate", L"slop_stall_frac_max", g_cfg.slop_stall_frac_max);
     write_ini_double(L"gate", L"slop_bigram_bpc_max", g_cfg.slop_bigram_bpc_max);
     write_ini_double(L"gate", L"gate_min_chars", g_cfg.gate_min_chars);
+    write_ini_double(L"policy", L"vi_reward", g_cfg.vi_reward_enabled ? 1 : 0);
     write_ini_double(L"policy", L"min_flow_hold_s", g_cfg.min_flow_hold_s);
     write_ini_double(L"policy", L"mean_reward_interval_s", g_cfg.mean_reward_interval_s);
     write_ini_double(L"policy", L"min_cooldown_s", g_cfg.min_cooldown_s);
@@ -130,6 +137,8 @@ void persist_config() {
     write_ini_double(L"intiface", L"enabled", g_cfg.intiface_enabled ? 1 : 0);
     write_ini_double(L"intiface", L"max_intensity", g_cfg.intiface_max_intensity);
     write_ini_double(L"intiface", L"buzz_ms", g_cfg.intiface_ms);
+    write_ini_double(L"intiface", L"flow_vibe", g_cfg.intiface_flow_vibe ? 1 : 0);
+    write_ini_double(L"intiface", L"flow_vibe_level", g_cfg.intiface_flow_vibe_level);
     WritePrivateProfileStringW(L"intiface", L"url", g_intiface_url.c_str(),
                                g_ini_path.c_str());
     write_ini_double(L"telemetry", L"debug", g_cfg.debug_telemetry ? 1 : 0);
@@ -174,6 +183,8 @@ void start_engine() {
         is.url.assign(g_intiface_url.begin(), g_intiface_url.end());
         is.max_intensity = g_cfg.intiface_max_intensity;
         is.buzz_ms = g_cfg.intiface_ms;
+        is.flow_vibe = g_cfg.intiface_flow_vibe;
+        is.flow_vibe_level = g_cfg.intiface_flow_vibe_level;
         auto hw = std::make_unique<sbpp::IntifaceAdapter>(is);
         g_intiface = hw.get();
         g_engine->add_adapter(std::move(hw));

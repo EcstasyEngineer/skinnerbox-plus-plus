@@ -14,6 +14,7 @@
 //                                reaches Intiface. Exit 0 = MVP loop works.
 //   demo.exe --url ws://...      Intiface server (default ws://127.0.0.1:12345)
 //   demo.exe --no-hw             run without Intiface (screen only)
+//   demo.exe --vibe              also hold a tonic vibe while in FLOW
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -174,6 +175,8 @@ int run_interactive(const sbpp::Config& cfg, const std::string& url, bool use_hw
         is.url = url;
         is.max_intensity = cfg.intiface_max_intensity;
         is.buzz_ms = cfg.intiface_ms;
+        is.flow_vibe = cfg.intiface_flow_vibe;
+        is.flow_vibe_level = cfg.intiface_flow_vibe_level;
         auto hw_owned = std::make_unique<sbpp::IntifaceAdapter>(is);
         hw = hw_owned.get();
         engine.add_adapter(std::move(hw_owned));
@@ -238,17 +241,19 @@ int run_interactive(const sbpp::Config& cfg, const std::string& url, bool use_hw
 
 int main(int argc, char** argv) {
     std::string url = "ws://127.0.0.1:12345";
-    bool selftest = false, use_hw = true, shipped = false;
+    bool selftest = false, use_hw = true, shipped = false, vibe = false;
     for (int i = 1; i < argc; ++i) {
         if (!strcmp(argv[i], "--selftest")) selftest = true;
         else if (!strcmp(argv[i], "--no-hw")) use_hw = false;
         else if (!strcmp(argv[i], "--shipped")) shipped = true;
         else if (!strcmp(argv[i], "--snappy")) shipped = false;
+        else if (!strcmp(argv[i], "--vibe")) vibe = true;
         else if (!strcmp(argv[i], "--url") && i + 1 < argc) url = argv[++i];
     }
     if (selftest) return run_selftest(url, use_hw);
 
     sbpp::Config cfg;
+    cfg.intiface_flow_vibe = vibe;
     if (!shipped) {
         // Demo timing: qualify after 15 s of FLOW, mature in ~45 s on average,
         // 20 s cooldown — you feel the loop within the first two minutes.

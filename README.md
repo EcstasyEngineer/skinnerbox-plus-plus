@@ -44,10 +44,21 @@ The whole machine is a three-state FSM:
   VI + a state gate reinforces *staying in the state*, not performing for the
   dispenser.
 - **Outputs.** The caret line warms toward gold as flow rises (tonic); a
-  delivered reward buzzes your Intiface device and blooms the tint (phasic).
-  Client-side intensity cap (30% of the device's range by default) — Buttplug
-  has no server-side cap, so the plugin owns the stop and every buzz ends in
-  an explicit zero.
+  delivered reward plays an enveloped vibration on your Intiface device and
+  blooms the tint (phasic). Client-side intensity cap (30% of the device's
+  range by default) — Buttplug has no server-side cap, so the plugin owns the
+  stop and every envelope ends in an explicit zero.
+
+Two hardware modes, independently toggleable in the INI:
+
+| mode | INI key | default | what it does |
+|---|---|---|---|
+| Random rewards | `[policy] vi_reward` | **on** | variable-interval enveloped rewards while FLOW holds — the conditioning schedule |
+| Flow vibe | `[intiface] flow_vibe` | off | continuous tonic vibe (at `flow_vibe_level` × cap) whenever you're in FLOW |
+
+Flow vibe is off by default on purpose: a constant baseline habituates and
+steals contrast from the phasic rewards. It's there because it's a legitimate
+mode, not because it conditions better.
 
 ## Demo
 

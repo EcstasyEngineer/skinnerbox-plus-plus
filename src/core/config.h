@@ -37,6 +37,7 @@ struct Config {
                                        // content evidence = gate fails closed
 
     // --- reward policy (variable interval, state-gated) ---
+    bool vi_reward_enabled = true;         // the random-schedule phasic rewards
     double min_flow_hold_s = 30.0;         // must hold FLOW this long to qualify
     double mean_reward_interval_s = 120.0; // VI hazard mean once qualified
     double min_cooldown_s = 40.0;          // hard floor between deliveries —
@@ -63,6 +64,13 @@ struct Config {
                                           // ~0.5 s of ease-in/out ramps —
                                           // reward magnitude is carried by
                                           // DURATION at fixed peak
+    // "Vibe while in FLOW": continuous tonic vibration whenever the FSM is in
+    // FLOW, at flow_vibe_level (fraction of the intensity cap). Off by
+    // default: a constant baseline habituates and steals contrast from the
+    // phasic rewards — but it's a legitimate mode of its own, so it's a
+    // toggle, not a rule. Both modes can run together.
+    bool intiface_flow_vibe = false;
+    double intiface_flow_vibe_level = 0.5;
 
     // --- debug telemetry (default-off, one switch): per-event raw log
     // INCLUDING typed text, for offline experiments (this is where the

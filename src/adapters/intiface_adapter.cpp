@@ -210,6 +210,41 @@ void IntifaceAdapter::parse_device_list(const std::string& json) {
     }
 }
 
+void IntifaceAdapter::ambient(const AmbientState& state) {
+    if (!cfg_.flow_vibe) return;
+    const double level =
+        state.regime == Regime::Flow ? cfg_.flow_vibe_level : 0.0;
+    std::unique_lock<std::mutex> lk(mu_, std::try_to_lock);
+    if (!lk.owns_lock()) return; // reward envelope in progress; retry next tick
+    if (level == tonic_level_) return;
+    if (level == 0.0 && !connected_) { tonic_level_ = 0.0; return; }
+    if (!connect() || devices_.empty()) return;
+    bool io_ok = true;
+    double out = 0.0;
+    for (const Device& d : devices_) {
+        const int cap_step =
+            static_cast<int>(cfg_.max_intensity * d.max_value + 0.5);
+        int step = static_cast<int>(level * cap_step + 0.5);
+        step = std::min(step, cap_step);
+        if (level > 0.0) step = std::max(step, 1);
+        out = std::max(out, static_cast<double>(step) / d.max_value);
+        char cmd[224];
+        snprintf(cmd, sizeof(cmd),
+                 "[{\"OutputCmd\":{\"Id\":%d,\"DeviceIndex\":%d,"
+                 "\"FeatureIndex\":%d,\"Command\":{\"Vibrate\":{\"Value\":%d}}}}]",
+                 next_id_++, d.index, d.feature, step);
+        io_ok = send(cmd) && io_ok;
+    }
+    if (io_ok) {
+        tonic_level_ = level;
+        current_output_ = level > 0.0 ? out : 0.0;
+    } else {
+        close(); // dead socket: reconnect on a later tick / next deliver
+        tonic_level_ = 0.0;
+        current_output_ = 0.0;
+    }
+}
+
 void IntifaceAdapter::deliver(const RewardIntent& intent) {
     const double dose = intent.dose;
     std::thread([this, dose] {
@@ -255,8 +290,11 @@ void IntifaceAdapter::deliver(const RewardIntent& intent) {
             std::this_thread::sleep_for(std::chrono::milliseconds(150));
         }
         // We own the stop: OutputCmd has no duration, so a value would persist
-        // forever if we didn't explicitly zero it.
+        // forever if we didn't explicitly zero it. Ending at zero also resets
+        // the cached tonic level, so flow-vibe mode re-asserts its baseline on
+        // the next tick instead of trusting a stale cache.
         set_level(0.0);
+        tonic_level_ = 0.0;
         // A failed send means the socket is dead (server restart, BLE hiccup).
         // Close now so the next deliver/reconnect re-establishes instead of
         // silently shouting into a corpse.

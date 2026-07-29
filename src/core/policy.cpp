@@ -31,7 +31,7 @@ std::optional<RewardIntent> RewardPolicy::tick(double now_s, double dt_s,
     // reward with stopping — live test showed the writer instantly reading it
     // as "I stopped, so it paid," which conditions exactly the wrong thing.
     const bool typing_now = state.idle_seconds < 1.0;
-    if (eligible_ && typing_now &&
+    if (cfg_.vi_reward_enabled && eligible_ && typing_now &&
         now_s - last_delivery_s_ >= cfg_.min_cooldown_s) {
         eligible_ = false;
         last_delivery_s_ = now_s;
