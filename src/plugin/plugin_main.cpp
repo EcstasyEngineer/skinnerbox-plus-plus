@@ -21,6 +21,7 @@
 #include "../core/engine.h"
 #include "../adapters/audio_adapter.h"
 #include "../adapters/log_adapter.h"
+#include "../adapters/raw_log.h"
 #include "npp_visual_adapter.h"
 
 namespace {
@@ -32,6 +33,7 @@ NppData g_npp;
 FuncItem g_funcs[kNbFunc];
 sbpp::Config g_cfg;
 std::unique_ptr<sbpp::FlowEngine> g_engine;
+std::unique_ptr<sbpp::RawLog> g_rawlog;
 UINT_PTR g_timer = 0;
 bool g_enabled = false;
 bool g_focus_was_here = true;
@@ -83,6 +85,8 @@ void load_config() {
     g_cfg.statusbar_enabled = read_ini_double(L"channels", L"statusbar", 1) != 0;
     g_cfg.bloom_ms =
         static_cast<uint32_t>(read_ini_double(L"channels", L"bloom_ms", d.bloom_ms));
+    g_cfg.raw_log_enabled = read_ini_double(L"telemetry", L"raw_log", 0) != 0;
+    g_cfg.capture_text = read_ini_double(L"telemetry", L"capture_text", 0) != 0;
     g_enabled = read_ini_double(L"general", L"enabled", 1) != 0;
 }
 
@@ -105,17 +109,19 @@ void persist_config() {
     write_ini_double(L"channels", L"audio", g_cfg.audio_enabled ? 1 : 0);
     write_ini_double(L"channels", L"statusbar", g_cfg.statusbar_enabled ? 1 : 0);
     write_ini_double(L"channels", L"bloom_ms", g_cfg.bloom_ms);
+    write_ini_double(L"telemetry", L"raw_log", g_cfg.raw_log_enabled ? 1 : 0);
+    write_ini_double(L"telemetry", L"capture_text", g_cfg.capture_text ? 1 : 0);
 }
 
 // --------------------------------------------------------------- session ---
 
-std::wstring session_log_path() {
+std::wstring session_base_name() {
     CreateDirectoryW(g_log_dir.c_str(), nullptr);
     std::time_t t = std::time(nullptr);
     std::tm tm{};
     localtime_s(&tm, &t);
     wchar_t name[64];
-    wcsftime(name, 64, L"session-%Y%m%d-%H%M%S.jsonl", &tm);
+    wcsftime(name, 64, L"session-%Y%m%d-%H%M%S", &tm);
     return g_log_dir + L"\\" + name;
 }
 
@@ -129,13 +135,18 @@ void CALLBACK timer_proc(HWND, UINT, UINT_PTR, DWORD) {
     if (g_focus_was_here && !here) g_engine->on_focus_loss(t);
     g_focus_was_here = here;
     g_engine->tick(t);
+    if (g_rawlog) g_rawlog->tick(t, g_engine->state());
 }
 
 void start_engine() {
     if (g_engine) return;
     const uint64_t seed = GetTickCount64() ^ (static_cast<uint64_t>(GetCurrentProcessId()) << 32);
+    const std::wstring base = session_base_name();
     g_engine = std::make_unique<sbpp::FlowEngine>(g_cfg, seed);
-    g_engine->add_adapter(std::make_unique<sbpp::LogAdapter>(session_log_path()));
+    g_engine->add_adapter(std::make_unique<sbpp::LogAdapter>(base + L".jsonl"));
+    if (g_cfg.raw_log_enabled)
+        g_rawlog = std::make_unique<sbpp::RawLog>(base + L".raw.jsonl",
+                                                  g_cfg.capture_text);
     if (g_cfg.visual_enabled || g_cfg.statusbar_enabled)
         g_engine->add_adapter(std::make_unique<sbpp::NppVisualAdapter>(g_npp, g_cfg));
     if (g_cfg.audio_enabled)
@@ -153,6 +164,7 @@ void stop_engine() {
         g_engine->shutdown();
         g_engine.reset();
     }
+    g_rawlog.reset();
 }
 
 // ------------------------------------------------------------ menu items ---
@@ -258,12 +270,20 @@ extern "C" __declspec(dllexport) void beNotified(SCNotification* n) {
             // Only user-performed edits; clamp so file loads and giant pastes
             // don't masquerade as a torrent of typing.
             if (!(n->modificationType & SC_PERFORMED_USER)) break;
+            const double t = now_s();
             const auto chars =
                 static_cast<uint32_t>(n->length > 256 ? 256 : n->length);
-            if (n->modificationType & SC_MOD_INSERTTEXT)
-                g_engine->on_insert(now_s(), chars);
-            else if (n->modificationType & SC_MOD_DELETETEXT)
-                g_engine->on_delete(now_s(), chars);
+            if (n->modificationType & SC_MOD_INSERTTEXT) {
+                g_engine->on_insert(t, chars);
+                if (g_rawlog)
+                    g_rawlog->event(t, "ins", n->position, n->length, n->text,
+                                    static_cast<size_t>(n->length));
+            } else if (n->modificationType & SC_MOD_DELETETEXT) {
+                g_engine->on_delete(t, chars);
+                if (g_rawlog)
+                    g_rawlog->event(t, "del", n->position, n->length, n->text,
+                                    static_cast<size_t>(n->length));
+            }
             break;
         }
         default:

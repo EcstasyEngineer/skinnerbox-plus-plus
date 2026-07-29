@@ -32,6 +32,11 @@ struct Config {
     bool audio_enabled = true;
     bool statusbar_enabled = true;
 
+    // --- telemetry (both default-off: raw is fine-grained behavior data,
+    // capture_text additionally records typed document content) ---
+    bool raw_log_enabled = false;
+    bool capture_text = false;
+
     // Phasic visual bloom duration.
     uint32_t bloom_ms = 8000;
 };

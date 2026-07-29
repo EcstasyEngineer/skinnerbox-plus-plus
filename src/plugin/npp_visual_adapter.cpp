@@ -48,9 +48,11 @@ void NppVisualAdapter::set_statusbar(const AmbientState& s) {
     wchar_t bar[8] = L"";
     for (int i = 0; i < 5; ++i) bar[i] = i < filled ? L'▰' : L'▱';
     bar[5] = L'\0';
-    wchar_t text[96];
-    swprintf(text, 96, L"SkinnerBox++ %s %.2f %hs", bar, s.flow,
-             regime_name(s.regime));
+    wchar_t text[160];
+    swprintf(text, 160,
+             L"SkinnerBox++ %s %.2f %hs | %.0f cpm  del %.2f  burst %.0fs",
+             bar, s.flow, regime_name(s.regime), s.net_rate_cpm,
+             s.deletion_ratio, s.burst_seconds);
     if (last_status_ == text) return;
     last_status_ = text;
     SendMessage(npp_._nppHandle, NPPM_SETSTATUSBAR, STATUSBAR_DOC_TYPE,
