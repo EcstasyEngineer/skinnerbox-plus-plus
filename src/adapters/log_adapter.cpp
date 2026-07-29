@@ -20,17 +20,6 @@ LogAdapter::LogAdapter(const std::wstring& path) {
 
 LogAdapter::~LogAdapter() { shutdown(); }
 
-void LogAdapter::note_session_arm(bool block_mode, bool withheld) {
-    if (!file_) return;
-    char buf[160];
-    snprintf(buf, sizeof(buf),
-             "{\"event\":\"session_arm\",\"ts\":\"%s\",\"mode\":\"%s\","
-             "\"arm\":\"%s\"}",
-             timestamp().c_str(), block_mode ? "block" : "per_moment",
-             withheld ? "withheld" : "delivered");
-    write_line(buf);
-}
-
 std::string LogAdapter::timestamp() {
     std::time_t t = std::time(nullptr);
     std::tm tm{};
@@ -51,7 +40,6 @@ void LogAdapter::ambient(const AmbientState& s) {
     if (!file_) return;
     // Regime transitions always log; full snapshots are downsampled.
     if (!regime_logged_once_ || s.regime != last_regime_) {
-        const Regime prev = last_regime_;
         regime_logged_once_ = true;
         last_regime_ = s.regime;
         char buf[192];
@@ -59,53 +47,31 @@ void LogAdapter::ambient(const AmbientState& s) {
                  "{\"event\":\"regime\",\"ts\":\"%s\",\"regime\":\"%s\",\"flow\":%.3f}",
                  timestamp().c_str(), regime_name(s.regime), s.flow);
         write_line(buf);
-        // Pause dataset: record every PAUSED/STALL episode with duration and
-        // how it resolved. Labels only; nothing acts on these.
-        const bool was_pause = prev == Regime::Paused || prev == Regime::Stall;
-        const bool is_pause = s.regime == Regime::Paused || s.regime == Regime::Stall;
-        if (!was_pause && is_pause) {
-            pause_started_ = std::time(nullptr);
-            pause_kind_ = s.regime;
-        } else if (was_pause && is_pause && s.regime == Regime::Stall) {
-            pause_kind_ = Regime::Stall; // escalated PAUSED -> STALL
-        } else if (was_pause && !is_pause && pause_started_) {
-            char pb[224];
-            snprintf(pb, sizeof(pb),
-                     "{\"event\":\"pause_resolved\",\"ts\":\"%s\",\"kind\":\"%s\","
-                     "\"duration_s\":%lld,\"resumed_as\":\"%s\",\"gate_ok\":%s}",
-                     timestamp().c_str(), regime_name(pause_kind_),
-                     static_cast<long long>(std::time(nullptr) - pause_started_),
-                     regime_name(s.regime), s.gate_ok ? "true" : "false");
-            write_line(pb);
-            pause_started_ = 0;
-        }
     }
     if (++ambient_downsample_ < kAmbientEveryNTicks) return;
     ambient_downsample_ = 0;
-    char buf[448];
+    char buf[384];
     snprintf(buf, sizeof(buf),
              "{\"event\":\"snapshot\",\"ts\":\"%s\",\"flow\":%.3f,\"regime\":\"%s\","
              "\"net_cpm\":%.1f,\"del_ratio\":%.3f,\"burst_s\":%.1f,"
              "\"idle_s\":%.1f,\"focus_losses\":%u,"
              "\"repetition\":%.3f,\"entropy\":%.2f,\"stall_frac\":%.3f,"
-             "\"gate_ok\":%s,\"restoration\":%.2f}",
+             "\"bigram_bpc\":%.2f,\"gate_ok\":%s}",
              timestamp().c_str(), s.flow, regime_name(s.regime), s.net_rate_cpm,
              s.deletion_ratio, s.burst_seconds, s.idle_seconds, s.focus_losses,
-             s.repetition, s.entropy, s.stall_frac, s.gate_ok ? "true" : "false",
-             s.restoration);
+             s.repetition, s.entropy, s.stall_frac, s.bigram_bpc,
+             s.gate_ok ? "true" : "false");
     write_line(buf);
 }
 
 void LogAdapter::deliver(const RewardIntent& i) {
     if (!file_) return;
-    char buf[320];
+    char buf[288];
     snprintf(buf, sizeof(buf),
              "{\"event\":\"reward\",\"ts\":\"%s\",\"kind\":\"%s\",\"reason\":\"%s\","
-             "\"confidence\":%.3f,\"dose\":%.3f,\"max_duration_ms\":%u,"
-             "\"withheld\":%s}",
+             "\"confidence\":%.3f,\"dose\":%.3f,\"max_duration_ms\":%u}",
              timestamp().c_str(), reward_class_name(i.kind), i.reason.c_str(),
-             i.confidence, i.dose, i.max_duration_ms,
-             i.withheld ? "true" : "false");
+             i.confidence, i.dose, i.max_duration_ms);
     write_line(buf);
 }
 

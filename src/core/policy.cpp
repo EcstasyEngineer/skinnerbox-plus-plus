@@ -8,98 +8,42 @@
 
 namespace sbpp {
 
-std::optional<RewardIntent> RewardPolicy::emit(double now_s, RewardClass kind,
-                                               const char* reason,
-                                               double confidence, double dose) {
-    std::uniform_real_distribution<double> u(0.0, 1.0);
-    const bool withheld = cfg_.withhold_block_mode
-                              ? session_withheld_
-                              : u(rng_) < cfg_.withhold_probability;
-    // Cooldown advances in BOTH arms. If only delivered rewards reset it, the
-    // withheld arm becomes eligible again sooner and the two arms no longer
-    // share a treatment history — the counterfactual comparison is then
-    // confounded by schedule, not just by the reward.
-    last_delivery_s_ = now_s;
-    RewardIntent intent;
-    intent.kind = kind;
-    intent.confidence = confidence;
-    intent.dose = std::clamp(dose, 0.0, 1.0);
-    intent.max_duration_ms = cfg_.bloom_ms;
-    intent.reason = reason;
-    intent.withheld = withheld;
-    return intent;
-}
-
 std::optional<RewardIntent> RewardPolicy::tick(double now_s, double dt_s,
                                                const AmbientState& state) {
-    std::uniform_real_distribution<double> u(0.0, 1.0);
-
-    // --- stall recovery tracking ---
-    if (prev_regime_ == Regime::Stall && state.regime != Regime::Stall) {
-        recovery_started_s_ = now_s;
-        // Baseline the monotonic counter: only characters typed AFTER the
-        // stall ended can count toward recovery. (Integrating net_rate_cpm
-        // here let pre-stall typing, still inside its 60 s window, qualify a
-        // recovery that never happened.)
-        recovery_baseline_chars_ = state.total_inserted;
-    }
-    if (state.regime == Regime::Stall) recovery_started_s_ = -1.0;
-    std::optional<RewardIntent> result;
-    if (recovery_started_s_ >= 0.0) {
-        if (now_s - recovery_started_s_ > cfg_.recovery_window_s) {
-            recovery_started_s_ = -1.0; // window closed without qualifying
-        } else {
-            const double fresh_chars = static_cast<double>(
-                state.total_inserted - recovery_baseline_chars_);
-            if (cfg_.recovery_reward_enabled &&
-                fresh_chars >= cfg_.recovery_chars &&
-                state.gate_ok && // conjunction: recovery must be real content
-                now_s - last_delivery_s_ >= cfg_.min_cooldown_s) {
-                recovery_started_s_ = -1.0;
-                result = emit(now_s, RewardClass::RecoveryReward,
-                              "stall_recovery", 0.7,
-                              0.3 + 0.4 * state.flow);
-            }
-        }
-    }
-
-    // --- flow variable-interval ---
-    if (state.regime == Regime::Flow) {
-        // A PAUSED interlude doesn't restart the hold clock.
-        if (prev_regime_ != Regime::Flow && prev_regime_ != Regime::Paused)
-            flow_entered_s_ = now_s;
-        if (flow_entered_s_ < 0.0) flow_entered_s_ = now_s;
-        // Conjunction: the hazard clock only advances while the content gate
-        // passes — spoofed momentum accrues zero eligibility.
-        const bool held = now_s - flow_entered_s_ >= cfg_.min_flow_hold_s;
-        if (held && state.gate_ok && !eligible_) {
-            // Exponential hazard: P(mature in dt) = 1 - exp(-dt/mean).
-            const double p = 1.0 - std::exp(-dt_s / cfg_.mean_reward_interval_s);
-            if (u(rng_) < p) eligible_ = true;
-        }
-        // Fire at a burst boundary: a short natural pause, not mid-keystroke.
-        const bool at_boundary =
-            state.idle_seconds >= 1.0 &&
-            state.idle_seconds <= cfg_.burst_gap_seconds + 2.0;
-        if (!result && cfg_.micro_reward_enabled && eligible_ && at_boundary &&
-            state.gate_ok &&
-            now_s - last_delivery_s_ >= cfg_.min_cooldown_s) {
-            eligible_ = false;
-            result = emit(now_s, RewardClass::MicroReward, "flow_vi_reward",
-                          state.flow, 0.3 + 0.5 * state.flow);
-        }
-    } else if (state.regime == Regime::Paused) {
-        // Neutral: nothing matures, nothing fires, nothing is lost beyond the
-        // score's own honest decay. flow_entered_s_ is kept so a quick return
-        // to FLOW doesn't restart the hold clock from zero.
-        eligible_ = false;
-    } else {
+    if (state.regime != Regime::Flow) {
+        // Eligibility and the hold clock do not survive leaving FLOW.
         flow_entered_s_ = -1.0;
-        eligible_ = false; // eligibility does not survive leaving FLOW
+        eligible_ = false;
+        return std::nullopt;
     }
 
-    prev_regime_ = state.regime;
-    return result;
+    if (flow_entered_s_ < 0.0) flow_entered_s_ = now_s;
+    const bool held = now_s - flow_entered_s_ >= cfg_.min_flow_hold_s;
+    if (held && !eligible_) {
+        // Exponential hazard: P(mature in dt) = 1 - exp(-dt/mean).
+        std::uniform_real_distribution<double> u(0.0, 1.0);
+        const double p = 1.0 - std::exp(-dt_s / cfg_.mean_reward_interval_s);
+        if (u(rng_) < p) eligible_ = true;
+    }
+
+    // Fire only while keys are actively moving (idle < 1 s). The buzz must
+    // land DURING the behavior it reinforces: delivering in a pause pairs the
+    // reward with stopping — live test showed the writer instantly reading it
+    // as "I stopped, so it paid," which conditions exactly the wrong thing.
+    const bool typing_now = state.idle_seconds < 1.0;
+    if (eligible_ && typing_now &&
+        now_s - last_delivery_s_ >= cfg_.min_cooldown_s) {
+        eligible_ = false;
+        last_delivery_s_ = now_s;
+        RewardIntent intent;
+        intent.kind = RewardClass::MicroReward;
+        intent.confidence = state.flow;
+        intent.dose = std::clamp(0.3 + 0.5 * state.flow, 0.0, 1.0);
+        intent.max_duration_ms = cfg_.bloom_ms;
+        intent.reason = "flow_vi_reward";
+        return intent;
+    }
+    return std::nullopt;
 }
 
 } // namespace sbpp

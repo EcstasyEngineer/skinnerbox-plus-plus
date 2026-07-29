@@ -12,11 +12,6 @@ namespace sbpp {
 // non-blocking on the caller's thread, and must restore any state they touched
 // in shutdown() — the engine guarantees shutdown() is called on unload, and a
 // crash-safe adapter fails toward "off / neutral".
-//
-// deliver() is also called for withheld intents (intent.withheld == true).
-// Only logging/telemetry adapters should act on those; sensory adapters must
-// return without output, because withheld events exist to measure what happens
-// when a qualifying moment goes unrewarded.
 class IOutputAdapter {
 public:
     virtual ~IOutputAdapter() = default;

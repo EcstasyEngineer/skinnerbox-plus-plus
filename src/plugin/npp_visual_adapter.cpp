@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstdio>
 
+#include "../adapters/intiface_adapter.h"
 #include "../npp/Scintilla.h"
 
 namespace sbpp {
@@ -35,8 +36,9 @@ void warm_target(COLORREF base, BYTE& r, BYTE& g, BYTE& b) {
 
 } // namespace
 
-NppVisualAdapter::NppVisualAdapter(const NppData& npp, const Config& cfg)
-    : npp_(npp), cfg_(cfg) {
+NppVisualAdapter::NppVisualAdapter(const NppData& npp, const Config& cfg,
+                                   const IntifaceAdapter* hw)
+    : npp_(npp), cfg_(cfg), hw_(hw) {
     base_color_ = static_cast<COLORREF>(
         SendMessage(npp_._scintillaMainHandle, SCI_GETCARETLINEBACK, 0, 0));
     base_caretline_visible_ = static_cast<int>(
@@ -54,26 +56,28 @@ void NppVisualAdapter::apply_color(COLORREF color) {
 
 void NppVisualAdapter::set_statusbar(const AmbientState& s) {
     if (!cfg_.statusbar_enabled) return;
-    const int filled = static_cast<int>(s.flow * 5.0 + 0.5);
-    wchar_t bar[8] = L"";
-    for (int i = 0; i < 5; ++i) bar[i] = i < filled ? L'▰' : L'▱';
-    bar[5] = L'\0';
+    // The numbers that matter, no meters: flow, FSM state, what the hardware
+    // is outputting right now, and whether it's even connected.
+    wchar_t hw[48];
+    if (!hw_) {
+        swprintf(hw, 48, L"hw off");
+    } else if (hw_->connected()) {
+        swprintf(hw, 48, L"hw ok (%zu dev)", hw_->device_count());
+    } else {
+        swprintf(hw, 48, L"hw DISCONNECTED");
+    }
     wchar_t text[224];
     if (GetTickCount64() < message_until_ms_ && !message_.empty()) {
         // A reward happened: say what and why, in words, where the eye can
         // find it later — never a flash that interrupts reading.
-        swprintf(text, 224, L"%hs%s %.2f  ·  %s",
-                 cfg_.debug_telemetry ? "REC  " : "", bar, s.flow,
-                 message_.c_str());
-    } else if (cfg_.statusbar_verbose) {
-        swprintf(text, 224,
-                 L"%hs%s %.2f %hs%hs | %.0f cpm  del %.2f  burst %.0fs",
-                 cfg_.debug_telemetry ? "REC  " : "", bar, s.flow,
-                 regime_name(s.regime), s.gate_ok ? "" : " ·gate x",
-                 s.net_rate_cpm, s.deletion_ratio, s.burst_seconds);
+        swprintf(text, 224, L"%hs%.2f %hs · %s · %s",
+                 cfg_.debug_telemetry ? "REC  " : "", s.flow,
+                 regime_name(s.regime), message_.c_str(), hw);
     } else {
-        swprintf(text, 224, L"%hs%s %.2f",
-                 cfg_.debug_telemetry ? "REC  " : "", bar, s.flow);
+        swprintf(text, 224, L"%hs%.2f %hs%hs · out %.2f · %s",
+                 cfg_.debug_telemetry ? "REC  " : "", s.flow,
+                 regime_name(s.regime), s.gate_ok ? "" : " (gate x)",
+                 hw_ ? hw_->current_output() : 0.0, hw);
     }
     if (last_status_ == text) return;
     last_status_ = text;
@@ -86,14 +90,8 @@ void NppVisualAdapter::ambient(const AmbientState& s) {
     if (cfg_.visual_enabled) {
         BYTE wr, wg, wb;
         warm_target(base_color_, wr, wg, wb);
-        // Tonic tint tops out at 35% toward warm; bloom pushes to 60%.
-        // PAUSED renders neutral (base color): the environment stops judging
-        // while the writer thinks — feedback during an unresolved pause is
-        // reinforcement that can't be retracted.
-        // Tonic scales by earned restoration: after a stall the environment
-        // starts neutral and warms back only as sustained work accumulates.
-        double target = 0.0;
-        if (s.regime != Regime::Paused) target = 0.35 * s.flow * s.restoration;
+        // Tonic tint tops out at 35% toward warm; bloom pushes past it.
+        double target = 0.35 * s.flow;
         // A reward lifts the tint slightly ABOVE where it already was, rather
         // than jumping to a fixed bright value: continuous with the ramp, so
         // it reads as "a bit warmer", never as a flash.
@@ -106,22 +104,13 @@ void NppVisualAdapter::ambient(const AmbientState& s) {
 }
 
 void NppVisualAdapter::deliver(const RewardIntent& intent) {
-    if (intent.withheld) return;
-    if (intent.kind == RewardClass::SessionSummary) return;
     const unsigned long long now = GetTickCount64();
     bloom_until_ms_ = now + intent.max_duration_ms;
     message_until_ms_ = now + cfg_.message_ms;
-    // Name the behavior that earned it, not the internal event name. If this
-    // sentence can't be written honestly for a reward type, that type is a bad
-    // heuristic and should be switched off rather than explained away.
+    // Name the behavior that earned it, not the internal event name.
     switch (intent.kind) {
         case RewardClass::MicroReward:
             message_ = L"held flow — good stretch";
-            break;
-        case RewardClass::RecoveryReward:
-            message_ = L"came back and kept writing";
-            break;
-        case RewardClass::SessionSummary:
             break;
     }
 }

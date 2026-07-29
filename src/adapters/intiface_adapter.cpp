@@ -74,7 +74,10 @@ bool IntifaceAdapter::connect() {
     WinHttpSetTimeouts(ses, kTimeoutMs, kTimeoutMs, kTimeoutMs, kTimeoutMs);
     HINTERNET con = WinHttpConnect(ses, host, uc.nPort, 0);
     if (!con) {
-        last_error_ = "connect failed (is Intiface Central running?)";
+        // Intiface Central serves ONE client at a time: the plugin and the
+        // console demo can't both hold it.
+        last_error_ = "connect failed (Intiface not running, or another "
+                      "client — plugin or demo — already connected?)";
         WinHttpCloseHandle(ses);
         return false;
     }
@@ -181,63 +184,90 @@ std::string IntifaceAdapter::recv(uint32_t) {
 
 void IntifaceAdapter::parse_device_list(const std::string& json) {
     devices_.clear();
-    // Walk each "DeviceIndex": n and pair it with the first feature range that
-    // follows. v4 advertises ranges as "Value":[min,max] under Output.Vibrate.
+    // Intiface v4 serializes object keys alphabetically, so within a device
+    // the feature blocks ("DeviceFeatures" -> "FeatureIndex" -> "Output" ->
+    // "Vibrate" -> "Value":[min,max]) come BEFORE that device's own
+    // "DeviceIndex". Walk each Vibrate output: its FeatureIndex is the
+    // nearest one before it, its DeviceIndex the nearest one after.
     size_t pos = 0;
     while (true) {
-        const size_t d = json.find("\"DeviceIndex\":", pos);
-        if (d == std::string::npos) break;
+        const size_t vib = json.find("\"Vibrate\"", pos);
+        if (vib == std::string::npos) break;
+        pos = vib + 9;
         Device dev;
+        const size_t val = json.find("\"Value\"", vib);
+        const size_t lb = val == std::string::npos ? val : json.find('[', val);
+        const size_t comma = lb == std::string::npos ? lb : json.find(',', lb);
+        if (comma == std::string::npos) continue;
+        dev.max_value = std::atoi(json.c_str() + comma + 1);
+        const size_t f = json.rfind("\"FeatureIndex\":", vib);
+        if (f != std::string::npos)
+            dev.feature = std::atoi(json.c_str() + f + 15);
+        const size_t d = json.find("\"DeviceIndex\":", vib);
+        if (d == std::string::npos) continue;
         dev.index = std::atoi(json.c_str() + d + 14);
-        const size_t vib = json.find("\"Vibrate\"", d);
-        if (vib != std::string::npos) {
-            const size_t val = json.find("\"Value\"", vib);
-            const size_t lb = json.find('[', val);
-            const size_t comma = json.find(',', lb);
-            if (lb != std::string::npos && comma != std::string::npos)
-                dev.max_value = std::atoi(json.c_str() + comma + 1);
-            double fi = 0;
-            if (find_number(json, "FeatureIndex", fi, d))
-                dev.feature = static_cast<int>(fi);
-            if (dev.max_value > 0) devices_.push_back(dev);
-        }
-        pos = d + 14;
+        if (dev.max_value > 0) devices_.push_back(dev);
     }
 }
 
 void IntifaceAdapter::deliver(const RewardIntent& intent) {
-    if (intent.withheld) return; // counterfactual: never actuate
-    if (intent.kind == RewardClass::SessionSummary) return;
     const double dose = intent.dose;
     std::thread([this, dose] {
         std::lock_guard<std::mutex> lk(mu_);
         if (!connect() || devices_.empty()) return;
-        // Dose maps into the device's own step range, clamped by our ceiling.
-        // Buttplug has no server-side cap, so this clamp is the only one.
-        for (const Device& d : devices_) {
-            const double frac = std::min(dose, 1.0) * cfg_.max_intensity;
-            int step = static_cast<int>(frac * d.max_value + 0.5);
-            step = std::max(1, std::min(step,
-                static_cast<int>(cfg_.max_intensity * d.max_value + 0.5)));
-            char cmd[224];
-            snprintf(cmd, sizeof(cmd),
-                     "[{\"OutputCmd\":{\"Id\":%d,\"DeviceIndex\":%d,"
-                     "\"FeatureIndex\":%d,\"Command\":{\"Vibrate\":{\"Value\":%d}}}}]",
-                     next_id_++, d.index, d.feature, step);
-            send(cmd);
+        // The reward is erogenous — the pleasure IS the reinforcer, so it is
+        // shaped like pleasure, not like a notification brick: quick ease-in,
+        // a sustain whose LENGTH carries the reward magnitude, gentle
+        // ease-out. Peak intensity is fixed at the cap: inside a tight cap,
+        // intensity differences aren't reliably discriminable, and
+        // habituation is fought with timing, never intensity. "Better flow →
+        // more pleasure time."
+        const auto sustain_ms = static_cast<uint32_t>(std::min(
+            4000.0, cfg_.buzz_ms * (0.5 + std::min(dose, 1.0))));
+        bool io_ok = true;
+        // level: fraction of the intensity cap, quantized into the device's
+        // own step range. Buttplug has no server-side cap; this is the cap.
+        auto set_level = [&](double level) {
+            double out = 0.0;
+            for (const Device& d : devices_) {
+                const int cap_step =
+                    static_cast<int>(cfg_.max_intensity * d.max_value + 0.5);
+                int step = static_cast<int>(level * cap_step + 0.5);
+                step = std::min(step, cap_step);
+                if (level > 0.0) step = std::max(step, 1);
+                out = std::max(out, static_cast<double>(step) / d.max_value);
+                char cmd[224];
+                snprintf(cmd, sizeof(cmd),
+                         "[{\"OutputCmd\":{\"Id\":%d,\"DeviceIndex\":%d,"
+                         "\"FeatureIndex\":%d,\"Command\":{\"Vibrate\":{\"Value\":%d}}}}]",
+                         next_id_++, d.index, d.feature, step);
+                io_ok = send(cmd) && io_ok;
+            }
+            current_output_ = io_ok ? out : 0.0;
+        };
+        for (double f : {0.4, 0.7, 1.0}) { // ease-in, ~200 ms to peak
+            set_level(f);
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(sustain_ms));
+        for (double f : {0.66, 0.33}) {    // ease-out, ~300 ms
+            set_level(f);
+            std::this_thread::sleep_for(std::chrono::milliseconds(150));
         }
         // We own the stop: OutputCmd has no duration, so a value would persist
         // forever if we didn't explicitly zero it.
-        std::this_thread::sleep_for(std::chrono::milliseconds(cfg_.buzz_ms));
-        for (const Device& d : devices_) {
-            char cmd[224];
-            snprintf(cmd, sizeof(cmd),
-                     "[{\"OutputCmd\":{\"Id\":%d,\"DeviceIndex\":%d,"
-                     "\"FeatureIndex\":%d,\"Command\":{\"Vibrate\":{\"Value\":0}}}}]",
-                     next_id_++, d.index, d.feature);
-            send(cmd);
-        }
+        set_level(0.0);
+        // A failed send means the socket is dead (server restart, BLE hiccup).
+        // Close now so the next deliver/reconnect re-establishes instead of
+        // silently shouting into a corpse.
+        if (!io_ok) close();
     }).detach();
+}
+
+void IntifaceAdapter::reconnect() {
+    std::lock_guard<std::mutex> lk(mu_);
+    close();
+    connect();
 }
 
 void IntifaceAdapter::close() {

@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <mutex>
 #include <string>
@@ -26,7 +27,6 @@ namespace sbpp {
 //   * The protocol's ping timeout is the dead-man's switch. If MaxPingTime is
 //     nonzero we ping at half that interval; if this plugin dies, pings stop
 //     and the server stops devices on its own.
-// Withheld intents never produce device traffic.
 class IntifaceAdapter : public IOutputAdapter {
 public:
     struct Settings {
@@ -43,9 +43,15 @@ public:
     void deliver(const RewardIntent& intent) override;
     void shutdown() override;
 
+    // Drop and re-establish the connection (menu action; safe from any thread).
+    void reconnect();
+
     bool connected() const { return connected_; }
     const std::string& last_error() const { return last_error_; }
     size_t device_count() const { return devices_.size(); }
+    // Fraction of max_intensity currently commanded to the device(s): nonzero
+    // only during a buzz. Feeds the status-bar "out" readout.
+    double current_output() const { return current_output_.load(); }
 
 private:
     struct Device {
@@ -64,6 +70,7 @@ private:
 
     Settings cfg_;
     std::mutex mu_;
+    std::atomic<double> current_output_{0.0};
     void* session_ = nullptr;   // HINTERNET
     void* connection_ = nullptr; // HINTERNET
     void* websocket_ = nullptr;  // HINTERNET (WebSocket handle)

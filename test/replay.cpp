@@ -66,9 +66,8 @@ public:
         if (s.regime == sbpp::Regime::Flow && !s.gate_ok) flow_while_gated++;
     }
     void deliver(const sbpp::RewardIntent& i) override {
-        if (i.kind == sbpp::RewardClass::SessionSummary) return;
-        printf("REWARD t+%us kind=%s reason=%s withheld=%d\n", ticks,
-               sbpp::reward_class_name(i.kind), i.reason.c_str(), i.withheld);
+        printf("REWARD t+%us kind=%s reason=%s dose=%.2f\n", ticks,
+               sbpp::reward_class_name(i.kind), i.reason.c_str(), i.dose);
         rewards++;
     }
     void shutdown() override {}

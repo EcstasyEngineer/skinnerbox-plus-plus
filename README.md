@@ -2,45 +2,71 @@
 
 An operant conditioning chamber for your editor.
 
-SkinnerBox++ is a self-contained Notepad++ plugin that watches your writing
-telemetry — typing bursts, deletion ratios, momentum, stalls, focus departures —
-estimates whether you're in flow, and reinforces that state. The editor warms
-around you while flow holds; qualifying moments earn a chime and a bloom. The
-box rewards the behavior it wants more of. You are the occupant.
+SkinnerBox++ is a self-contained Notepad++ plugin that measures two things
+about your writing — **momentum** (are you typing?) and **content entropy**
+(are you typing *writing*, not junk?) — and reinforces the state where both
+hold. Qualifying stretches of flow earn vibration rewards through
+[Intiface Central](https://intiface.com/central/) on a variable-interval
+schedule. The box rewards the behavior it wants more of. You are the occupant.
 
-No cloud, no daemon, no second thing to launch. One DLL, installed like any
-other plugin. Session logs are **metadata-only** — behavioral features and
-reward events, never your document text.
+Session logs are **metadata-only** — behavioral features and reward events,
+never your document text (unless you explicitly arm debug telemetry).
 
 ## How it works
 
 ```
-editor events ─→ feature extraction ─→ flow estimate ─→ reward policy ─→ outputs
+keystrokes ─→ momentum + content gate ─→ FSM ─→ VI reward policy ─→ outputs
 ```
 
-- **Telemetry.** Scintilla modification events (user-performed inserts/deletes),
-  idle time, focus departures. Aggregated into rolling windows: net chars/min,
-  deletion ratio, current burst length.
-- **Flow estimate.** A smoothed 0–1 score with hysteresis (enter FLOW at 0.70,
-  leave below 0.50) and four regimes: `DRAFTING`, `FLOW`, `EDITING`, `STALL`.
-  Thinking pauses aren't punished; only long idleness reads as a stall.
-- **Reward policy.** State-gated **variable-interval** reinforcement: while flow
-  holds (90 s minimum), reward eligibility matures on an exponential hazard
-  (mean 7 min), fires only at a natural pause, and respects a hard 4-minute
-  cooldown. Recovering from a stall with real forward progress earns its own
-  reward. A configurable fraction of qualifying moments is silently withheld
-  and logged — counterfactual data for the future adaptive policy.
-- **Outputs.** Tonic: the caret line warms toward gold as flow rises; the
-  status bar shows a small meter. Phasic: a soft chime plus a brief brighter
-  bloom on delivered rewards. All output channels implement one adapter
-  contract — see [docs/output-contract.md](docs/output-contract.md) for how
-  physical reward hardware plugs in later.
+The whole machine is a three-state FSM:
+
+```
+              activity                score ≥ enter AND gate ok
+    ┌──────┐ ────────►  ┌────────┐ ─────────────────────────► ┌──────┐
+    │ IDLE │            │ TYPING │                            │ FLOW │
+    └──────┘ ◄────────  └────────┘ ◄───────────────────────── └──────┘
+             idle > 30 s           score < exit OR gate fails
+```
+
+- **Momentum.** Net chars/min and burst persistence, smoothed (EWMA), with
+  hysteresis on the FLOW boundary (enter 0.70 / exit 0.50). Deleting heavily
+  and leaving the window drag it down; brief in-focus pauses (≤ 9 s) don't
+  break a burst — reaching for a word is part of the hike.
+- **Content gate.** A must-pass conjunction over the last 600 chars you
+  *typed* (deletions don't rewrite history): character entropy ≥ 3.4 bits,
+  repeated-token mass ≤ 0.55, "uuuh"-class filler ≤ 6%, plus tail checks that
+  catch "duper duper duper" the moment it happens. No content evidence = gate
+  fails closed. Momentum alone can never reach FLOW.
+- **Reward policy.** Variable-interval, state-gated: hold FLOW ≥ 30 s and
+  eligibility matures on an exponential hazard (mean 2 min); the reward fires
+  while you're actively typing — the buzz lands during the behavior it
+  reinforces, never in the pause after it — with a hard 60 s cooldown.
+  VI + a state gate reinforces *staying in the state*, not performing for the
+  dispenser.
+- **Outputs.** The caret line warms toward gold as flow rises (tonic); a
+  delivered reward buzzes your Intiface device and blooms the tint (phasic).
+  Client-side intensity cap (30% of the device's range by default) — Buttplug
+  has no server-side cap, so the plugin owns the stop and every buzz ends in
+  an explicit zero.
+
+## Demo
+
+`build\demo.exe` is the whole loop in a console window, no editor needed:
+type prose, watch the FSM, get buzzed when you hold flow on real content.
+
+```
+demo.exe              interactive, demo-friendly timing
+demo.exe --shipped    the plugin's patient shipped timing
+demo.exe --selftest   synthetic typist verifies the loop end-to-end, exit 0 = pass
+demo.exe --no-hw      screen only
+```
 
 ## Install
 
-1. Grab `SkinnerBoxPP.dll` (build it — see below).
-2. Create `<Notepad++ install>\plugins\SkinnerBoxPP\` and drop the DLL in it.
-3. Restart Notepad++. A `SkinnerBox++` entry appears under **Plugins**.
+1. Build (below), then copy `build\SkinnerBoxPP.dll` into
+   `<Notepad++>\plugins\SkinnerBoxPP\`.
+2. Start Intiface Central, connect your device.
+3. Restart Notepad++. **Plugins → SkinnerBox++** has the toggle and config.
 
 ## Build
 
@@ -50,27 +76,17 @@ Requires Visual Studio Build Tools (C++ workload). From a plain shell:
 build.bat
 ```
 
-Output lands at `build\SkinnerBoxPP.dll` (x64).
+Emits the plugin DLL, `replay.exe` (offline log replay harness), and
+`demo.exe`.
 
-## Configure
+## Experiments
 
-**Plugins → SkinnerBox++ → Open config** opens the INI (thresholds, intervals,
-channel toggles). Edit, save, then **Reload config**. Everything documented in
-`src/core/config.h` is exposed.
-
-**Open session logs** opens the JSONL session directory. One file per session:
-regime transitions, 30-second feature snapshots, and reward events (including
-withheld ones).
-
-## Roadmap
-
-- Physical reward adapters over MCP (candy dispenser, haptics — see the
-  output contract)
-- Personal salience model: label passages, train a ranker, gate rewards on
-  "was that bit actually good"
-- Audio clarity/muffling as a tonic channel
-- N-of-1 crossover experiment tooling on the session logs
+`experiments/` holds the offline lab (Python, local-only data): can GPT-2
+surprisal or POS-tag statistics measure writing *quality* well enough to
+gate rewards on it? See `docs/experiment-02-quality-signals.md` for results.
+Python is tooling only — nothing in the runtime loop depends on it.
 
 ## License
 
-GPL-3.0-or-later. Vendored Notepad++ plugin headers are GPL, © Don HO.
+GPL v3 or later. Vendored Notepad++/Scintilla headers under `src/npp/` are
+GPL from upstream.

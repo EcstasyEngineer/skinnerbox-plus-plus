@@ -19,31 +19,27 @@
 #include "../npp/Scintilla.h"
 #include "../core/config.h"
 #include "../core/engine.h"
-#include "../adapters/audio_adapter.h"
 #include "../adapters/log_adapter.h"
 #include "../adapters/intiface_adapter.h"
-#include "../adapters/mcp_adapter.h"
 #include "../adapters/raw_log.h"
 #include "npp_visual_adapter.h"
-
-#include <string>
 
 namespace {
 
 const wchar_t kPluginName[] = L"SkinnerBox++";
-constexpr int kNbFunc = 6;
+constexpr int kNbFunc = 8;
 
 NppData g_npp;
 FuncItem g_funcs[kNbFunc];
 sbpp::Config g_cfg;
 std::unique_ptr<sbpp::FlowEngine> g_engine;
 std::unique_ptr<sbpp::RawLog> g_rawlog;
+sbpp::IntifaceAdapter* g_intiface = nullptr; // owned by the engine
 UINT_PTR g_timer = 0;
 bool g_enabled = false;
 bool g_focus_was_here = true;
 std::wstring g_ini_path;
 std::wstring g_log_dir;
-std::wstring g_mcp_endpoint;
 std::wstring g_intiface_url;
 
 double now_s() { return static_cast<double>(GetTickCount64()) / 1000.0; }
@@ -64,57 +60,38 @@ void write_ini_double(const wchar_t* section, const wchar_t* key, double v) {
 }
 
 void load_config() {
-    // Round-trip every key so a fresh install materializes a complete,
-    // editable INI with the shipped defaults.
     sbpp::Config d; // defaults
+    g_enabled = read_ini_double(L"general", L"enabled", 1) != 0;
     g_cfg.target_net_cpm = read_ini_double(L"flow", L"target_net_cpm", d.target_net_cpm);
     g_cfg.ewma_alpha = read_ini_double(L"flow", L"ewma_alpha", d.ewma_alpha);
     g_cfg.flow_enter = read_ini_double(L"flow", L"flow_enter", d.flow_enter);
     g_cfg.flow_exit = read_ini_double(L"flow", L"flow_exit", d.flow_exit);
-    g_cfg.editing_deletion_ratio =
-        read_ini_double(L"flow", L"editing_deletion_ratio", d.editing_deletion_ratio);
-    g_cfg.stall_idle_seconds =
-        read_ini_double(L"flow", L"stall_idle_seconds", d.stall_idle_seconds);
     g_cfg.burst_gap_seconds =
         read_ini_double(L"flow", L"burst_gap_seconds", d.burst_gap_seconds);
-    g_cfg.mean_reward_interval_s =
-        read_ini_double(L"policy", L"mean_reward_interval_s", d.mean_reward_interval_s);
-    g_cfg.min_cooldown_s = read_ini_double(L"policy", L"min_cooldown_s", d.min_cooldown_s);
-    g_cfg.min_flow_hold_s = read_ini_double(L"policy", L"min_flow_hold_s", d.min_flow_hold_s);
-    g_cfg.withhold_probability =
-        read_ini_double(L"policy", L"withhold_probability", d.withhold_probability);
-    g_cfg.recovery_chars = read_ini_double(L"policy", L"recovery_chars", d.recovery_chars);
-    g_cfg.recovery_window_s =
-        read_ini_double(L"policy", L"recovery_window_s", d.recovery_window_s);
     g_cfg.grace_seconds = read_ini_double(L"flow", L"grace_seconds", d.grace_seconds);
+    g_cfg.idle_seconds = read_ini_double(L"flow", L"idle_seconds", d.idle_seconds);
     g_cfg.slop_repetition_max =
         read_ini_double(L"gate", L"slop_repetition_max", d.slop_repetition_max);
     g_cfg.slop_entropy_min =
         read_ini_double(L"gate", L"slop_entropy_min", d.slop_entropy_min);
     g_cfg.slop_stall_frac_max =
         read_ini_double(L"gate", L"slop_stall_frac_max", d.slop_stall_frac_max);
+    g_cfg.slop_bigram_bpc_max =
+        read_ini_double(L"gate", L"slop_bigram_bpc_max", d.slop_bigram_bpc_max);
     g_cfg.gate_min_chars = read_ini_double(L"gate", L"gate_min_chars", d.gate_min_chars);
+    g_cfg.min_flow_hold_s = read_ini_double(L"policy", L"min_flow_hold_s", d.min_flow_hold_s);
+    g_cfg.mean_reward_interval_s =
+        read_ini_double(L"policy", L"mean_reward_interval_s", d.mean_reward_interval_s);
+    g_cfg.min_cooldown_s = read_ini_double(L"policy", L"min_cooldown_s", d.min_cooldown_s);
     g_cfg.visual_enabled = read_ini_double(L"channels", L"visual", 1) != 0;
-    g_cfg.audio_enabled = read_ini_double(L"channels", L"audio", 0) != 0;
     g_cfg.statusbar_enabled = read_ini_double(L"channels", L"statusbar", 1) != 0;
-    g_cfg.statusbar_verbose =
-        read_ini_double(L"channels", L"statusbar_verbose", 0) != 0;
     g_cfg.bloom_ms =
         static_cast<uint32_t>(read_ini_double(L"channels", L"bloom_ms", d.bloom_ms));
     g_cfg.bloom_lift = read_ini_double(L"channels", L"bloom_lift", d.bloom_lift);
     g_cfg.message_ms = static_cast<uint32_t>(
         read_ini_double(L"channels", L"message_ms", d.message_ms));
-    g_cfg.micro_reward_enabled =
-        read_ini_double(L"rewards", L"micro_reward", 1) != 0;
-    g_cfg.recovery_reward_enabled =
-        read_ini_double(L"rewards", L"recovery_reward", 1) != 0;
-    g_cfg.withhold_block_mode =
-        read_ini_double(L"policy", L"withhold_block_mode", 1) != 0;
-    g_cfg.withhold_block_probability = read_ini_double(
-        L"policy", L"withhold_block_probability", d.withhold_block_probability);
-    g_cfg.restore_seconds =
-        read_ini_double(L"flow", L"restore_seconds", d.restore_seconds);
-    g_cfg.intiface_enabled = read_ini_double(L"intiface", L"enabled", 0) != 0;
+    g_cfg.intiface_enabled =
+        read_ini_double(L"intiface", L"enabled", d.intiface_enabled ? 1 : 0) != 0;
     g_cfg.intiface_max_intensity = read_ini_double(
         L"intiface", L"max_intensity", d.intiface_max_intensity);
     g_cfg.intiface_ms = static_cast<uint32_t>(
@@ -126,20 +103,6 @@ void load_config() {
         g_intiface_url = buf;
     }
     g_cfg.debug_telemetry = read_ini_double(L"telemetry", L"debug", 0) != 0;
-    g_cfg.mcp_enabled = read_ini_double(L"mcp", L"enabled", 0) != 0;
-    g_cfg.mcp_max_intensity =
-        read_ini_double(L"mcp", L"max_intensity", d.mcp_max_intensity);
-    g_cfg.mcp_max_seconds = static_cast<uint32_t>(
-        read_ini_double(L"mcp", L"max_seconds", d.mcp_max_seconds));
-    g_cfg.mcp_channel =
-        static_cast<int>(read_ini_double(L"mcp", L"channel", d.mcp_channel));
-    {
-        wchar_t buf[256];
-        GetPrivateProfileStringW(L"mcp", L"endpoint", L"http://127.0.0.1:9102/mcp",
-                                 buf, 256, g_ini_path.c_str());
-        g_mcp_endpoint = buf;
-    }
-    g_enabled = read_ini_double(L"general", L"enabled", 1) != 0;
 }
 
 void persist_config() {
@@ -148,49 +111,28 @@ void persist_config() {
     write_ini_double(L"flow", L"ewma_alpha", g_cfg.ewma_alpha);
     write_ini_double(L"flow", L"flow_enter", g_cfg.flow_enter);
     write_ini_double(L"flow", L"flow_exit", g_cfg.flow_exit);
-    write_ini_double(L"flow", L"editing_deletion_ratio", g_cfg.editing_deletion_ratio);
-    write_ini_double(L"flow", L"stall_idle_seconds", g_cfg.stall_idle_seconds);
     write_ini_double(L"flow", L"burst_gap_seconds", g_cfg.burst_gap_seconds);
-    write_ini_double(L"policy", L"mean_reward_interval_s", g_cfg.mean_reward_interval_s);
-    write_ini_double(L"policy", L"min_cooldown_s", g_cfg.min_cooldown_s);
-    write_ini_double(L"policy", L"min_flow_hold_s", g_cfg.min_flow_hold_s);
-    write_ini_double(L"policy", L"withhold_probability", g_cfg.withhold_probability);
-    write_ini_double(L"policy", L"recovery_chars", g_cfg.recovery_chars);
-    write_ini_double(L"policy", L"recovery_window_s", g_cfg.recovery_window_s);
     write_ini_double(L"flow", L"grace_seconds", g_cfg.grace_seconds);
+    write_ini_double(L"flow", L"idle_seconds", g_cfg.idle_seconds);
     write_ini_double(L"gate", L"slop_repetition_max", g_cfg.slop_repetition_max);
     write_ini_double(L"gate", L"slop_entropy_min", g_cfg.slop_entropy_min);
     write_ini_double(L"gate", L"slop_stall_frac_max", g_cfg.slop_stall_frac_max);
+    write_ini_double(L"gate", L"slop_bigram_bpc_max", g_cfg.slop_bigram_bpc_max);
     write_ini_double(L"gate", L"gate_min_chars", g_cfg.gate_min_chars);
+    write_ini_double(L"policy", L"min_flow_hold_s", g_cfg.min_flow_hold_s);
+    write_ini_double(L"policy", L"mean_reward_interval_s", g_cfg.mean_reward_interval_s);
+    write_ini_double(L"policy", L"min_cooldown_s", g_cfg.min_cooldown_s);
     write_ini_double(L"channels", L"visual", g_cfg.visual_enabled ? 1 : 0);
-    write_ini_double(L"channels", L"audio", g_cfg.audio_enabled ? 1 : 0);
     write_ini_double(L"channels", L"statusbar", g_cfg.statusbar_enabled ? 1 : 0);
-    write_ini_double(L"channels", L"statusbar_verbose",
-                     g_cfg.statusbar_verbose ? 1 : 0);
     write_ini_double(L"channels", L"bloom_ms", g_cfg.bloom_ms);
     write_ini_double(L"channels", L"bloom_lift", g_cfg.bloom_lift);
     write_ini_double(L"channels", L"message_ms", g_cfg.message_ms);
-    write_ini_double(L"rewards", L"micro_reward",
-                     g_cfg.micro_reward_enabled ? 1 : 0);
-    write_ini_double(L"rewards", L"recovery_reward",
-                     g_cfg.recovery_reward_enabled ? 1 : 0);
-    write_ini_double(L"policy", L"withhold_block_mode",
-                     g_cfg.withhold_block_mode ? 1 : 0);
-    write_ini_double(L"policy", L"withhold_block_probability",
-                     g_cfg.withhold_block_probability);
-    write_ini_double(L"flow", L"restore_seconds", g_cfg.restore_seconds);
     write_ini_double(L"intiface", L"enabled", g_cfg.intiface_enabled ? 1 : 0);
     write_ini_double(L"intiface", L"max_intensity", g_cfg.intiface_max_intensity);
     write_ini_double(L"intiface", L"buzz_ms", g_cfg.intiface_ms);
     WritePrivateProfileStringW(L"intiface", L"url", g_intiface_url.c_str(),
                                g_ini_path.c_str());
     write_ini_double(L"telemetry", L"debug", g_cfg.debug_telemetry ? 1 : 0);
-    write_ini_double(L"mcp", L"enabled", g_cfg.mcp_enabled ? 1 : 0);
-    write_ini_double(L"mcp", L"max_intensity", g_cfg.mcp_max_intensity);
-    write_ini_double(L"mcp", L"max_seconds", g_cfg.mcp_max_seconds);
-    write_ini_double(L"mcp", L"channel", g_cfg.mcp_channel);
-    WritePrivateProfileStringW(L"mcp", L"endpoint", g_mcp_endpoint.c_str(),
-                               g_ini_path.c_str());
 }
 
 // --------------------------------------------------------------- session ---
@@ -223,33 +165,22 @@ void start_engine() {
     const uint64_t seed = GetTickCount64() ^ (static_cast<uint64_t>(GetCurrentProcessId()) << 32);
     const std::wstring base = session_base_name();
     g_engine = std::make_unique<sbpp::FlowEngine>(g_cfg, seed);
-    {
-        auto log = std::make_unique<sbpp::LogAdapter>(base + L".jsonl");
-        log->note_session_arm(g_engine->block_mode(), g_engine->session_withheld());
-        g_engine->add_adapter(std::move(log));
-    }
+    g_engine->add_adapter(std::make_unique<sbpp::LogAdapter>(base + L".jsonl"));
     if (g_cfg.debug_telemetry)
         g_rawlog = std::make_unique<sbpp::RawLog>(base + L".raw.jsonl",
                                                   /*capture_text=*/true);
-    if (g_cfg.visual_enabled || g_cfg.statusbar_enabled)
-        g_engine->add_adapter(std::make_unique<sbpp::NppVisualAdapter>(g_npp, g_cfg));
-    if (g_cfg.audio_enabled)
-        g_engine->add_adapter(std::make_unique<sbpp::AudioAdapter>());
     if (g_cfg.intiface_enabled) {
         sbpp::IntifaceAdapter::Settings is;
         is.url.assign(g_intiface_url.begin(), g_intiface_url.end());
         is.max_intensity = g_cfg.intiface_max_intensity;
         is.buzz_ms = g_cfg.intiface_ms;
-        g_engine->add_adapter(std::make_unique<sbpp::IntifaceAdapter>(is));
+        auto hw = std::make_unique<sbpp::IntifaceAdapter>(is);
+        g_intiface = hw.get();
+        g_engine->add_adapter(std::move(hw));
     }
-    if (g_cfg.mcp_enabled) {
-        sbpp::McpAdapter::Settings ms;
-        ms.endpoint.assign(g_mcp_endpoint.begin(), g_mcp_endpoint.end());
-        ms.max_intensity = g_cfg.mcp_max_intensity;
-        ms.max_seconds = g_cfg.mcp_max_seconds;
-        ms.channel = g_cfg.mcp_channel;
-        g_engine->add_adapter(std::make_unique<sbpp::McpAdapter>(ms));
-    }
+    if (g_cfg.visual_enabled || g_cfg.statusbar_enabled)
+        g_engine->add_adapter(
+            std::make_unique<sbpp::NppVisualAdapter>(g_npp, g_cfg, g_intiface));
     g_timer = SetTimer(nullptr, 0, 1000, timer_proc);
     g_focus_was_here = true;
 }
@@ -259,6 +190,7 @@ void stop_engine() {
         KillTimer(nullptr, g_timer);
         g_timer = 0;
     }
+    g_intiface = nullptr; // engine shutdown destroys it
     if (g_engine) {
         g_engine->shutdown();
         g_engine.reset();
@@ -314,12 +246,63 @@ void cmd_toggle_debug() {
                 g_cfg.debug_telemetry ? TRUE : FALSE);
 }
 
+void cmd_intiface_test() {
+    if (!g_intiface) {
+        MessageBoxW(g_npp._nppHandle,
+                    L"Intiface channel is not active.\n\nEnable it in the INI "
+                    L"([intiface] enabled=1) and reload config, with the "
+                    L"engine enabled.",
+                    L"SkinnerBox++", MB_OK | MB_ICONWARNING);
+        return;
+    }
+    // A direct adapter poke, bypassing the policy: this answers "is the
+    // hardware path alive", nothing about flow.
+    sbpp::RewardIntent test;
+    test.kind = sbpp::RewardClass::MicroReward;
+    test.confidence = 1.0;
+    test.dose = 0.5;
+    test.max_duration_ms = g_cfg.intiface_ms;
+    test.reason = "manual_test_buzz";
+    g_intiface->deliver(test);
+    wchar_t msg[256];
+    if (g_intiface->connected()) {
+        swprintf(msg, 256,
+                 L"Test buzz sent (%zu device(s), dose 0.5, capped at %.0f%%).",
+                 g_intiface->device_count(),
+                 g_cfg.intiface_max_intensity * 100.0);
+    } else {
+        swprintf(msg, 256,
+                 L"Not connected — attempting now (watch the status bar).\n\n"
+                 L"Last error: %hs",
+                 g_intiface->last_error().empty()
+                     ? "(none)" : g_intiface->last_error().c_str());
+    }
+    MessageBoxW(g_npp._nppHandle, msg, L"SkinnerBox++ — Intiface",
+                MB_OK | MB_ICONINFORMATION);
+}
+
+void cmd_intiface_reconnect() {
+    if (!g_intiface) return;
+    g_intiface->reconnect();
+    wchar_t msg[256];
+    if (g_intiface->connected()) {
+        swprintf(msg, 256, L"Reconnected: %zu vibrating device(s).",
+                 g_intiface->device_count());
+    } else {
+        swprintf(msg, 256, L"Reconnect FAILED: %hs",
+                 g_intiface->last_error().empty()
+                     ? "(unknown)" : g_intiface->last_error().c_str());
+    }
+    MessageBoxW(g_npp._nppHandle, msg, L"SkinnerBox++ — Intiface",
+                MB_OK | MB_ICONINFORMATION);
+}
+
 void cmd_about() {
     MessageBoxW(g_npp._nppHandle,
                 L"SkinnerBox++\n\n"
                 L"An operant conditioning chamber for your editor: measures "
-                L"writing flow from typing telemetry and reinforces it with "
-                L"ambient and phasic rewards.\n\n"
+                L"typing momentum and content entropy, and reinforces FLOW "
+                L"with in-editor warmth and Intiface hardware rewards.\n\n"
                 L"Session logs are metadata-only (no document text).\n\n"
                 L"github.com/EcstasyEngineer/skinnerbox-plus-plus",
                 L"About SkinnerBox++", MB_OK | MB_ICONINFORMATION);
@@ -362,7 +345,9 @@ extern "C" __declspec(dllexport) FuncItem* getFuncsArray(int* count) {
     set(g_funcs[3], L"Open session logs", cmd_open_logs, false);
     set(g_funcs[4], L"Debug telemetry (records typed text)", cmd_toggle_debug,
         g_cfg.debug_telemetry);
-    set(g_funcs[5], L"About", cmd_about, false);
+    set(g_funcs[5], L"Intiface: test buzz", cmd_intiface_test, false);
+    set(g_funcs[6], L"Intiface: reconnect", cmd_intiface_reconnect, false);
+    set(g_funcs[7], L"About", cmd_about, false);
     *count = kNbFunc;
     return g_funcs;
 }

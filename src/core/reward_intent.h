@@ -2,9 +2,7 @@
 // This file is part of SkinnerBox++, released under the GNU GPL v3 or later.
 //
 // The policy layer never speaks device language. It emits semantic intents;
-// adapters map them to whatever a channel can safely do. This is the contract
-// every output — in-editor visuals, audio, log files, and future MCP-connected
-// hardware — implements against. See docs/output-contract.md for the wire form.
+// adapters map them to whatever a channel can safely do.
 
 #pragma once
 
@@ -13,12 +11,10 @@
 
 namespace sbpp {
 
-// Discrete (phasic) reward classes. Adapters decide what each means for their
-// channel; classes are stable identifiers, so append, never rename.
+// Discrete (phasic) reward classes. Classes are stable identifiers: append,
+// never rename.
 enum class RewardClass {
     MicroReward,       // qualifying moment during sustained flow
-    RecoveryReward,    // re-entered productive drafting after a stall
-    SessionSummary,    // end-of-session close-out event
 };
 
 struct RewardIntent {
@@ -27,19 +23,29 @@ struct RewardIntent {
     double dose;            // 0-1 abstract magnitude; NEVER a hardware amplitude
     uint32_t max_duration_ms; // upper bound for any time-based delivery
     std::string reason;     // machine-readable trigger tag, e.g. "flow_vi_reward"
-    bool withheld;          // true: policy qualified the moment but chose not to
-                            // deliver (counterfactual sample) — log it, don't act
 };
+
+// The whole machine is this finite state machine:
+//
+//                   activity              score>=enter && gate_ok
+//         ┌──────┐ ────────► ┌────────┐ ─────────────────────► ┌──────┐
+//         │ IDLE │           │ TYPING │                        │ FLOW │
+//         └──────┘ ◄──────── └────────┘ ◄───────────────────── └──────┘
+//                idle>idle_s        score<exit || !gate_ok
+//
+//   (IDLE is also reachable directly from FLOW on idle>idle_s.)
+//
+// IDLE   — no recent input. Nothing measured, nothing owed.
+// TYPING — producing input, but momentum or content hasn't qualified yet.
+// FLOW   — momentum above threshold (hysteresis: enter/exit) AND the content
+//          gate passes. The only state in which rewards can mature and fire.
+enum class Regime { Idle, Typing, Flow };
 
 // Continuous (tonic) state broadcast on every engine tick. Adapters use this
 // for slow ambient feedback; it is weather, not a payout.
-// Paused = in-focus idle past the grace window but short of a stall: the
-// environment goes neutral (not dimmed, not held) while the writer thinks.
-enum class Regime { Drafting, Flow, Editing, Stall, Paused };
-
 struct AmbientState {
     double flow = 0.0;      // smoothed 0-1 flow estimate
-    Regime regime = Regime::Drafting;
+    Regime regime = Regime::Idle;
     double net_rate_cpm = 0.0;   // net chars/minute over the short window
     double deletion_ratio = 0.0; // deleted / (inserted + deleted)
     double burst_seconds = 0.0;  // length of the current typing burst
@@ -50,26 +56,15 @@ struct AmbientState {
     double repetition = 0.0;
     double entropy = 0.0;
     double stall_frac = 0.0;
+    double bigram_bpc = 0.0;
     bool gate_ok = false;
-    // Monotonic count of characters inserted this session. Policies that need
-    // "chars since X" must diff this — deriving it from net_rate_cpm reads a
-    // trailing 60 s window and lets pre-event typing count toward post-event
-    // progress.
-    uint64_t total_inserted = 0;
-    // Earned tonic restoration, 0-1. Drops to 0 on a stall and climbs back as
-    // sustained active writing accumulates; adapters multiply their tonic
-    // feedback by it. Never granted retroactively — this is how "came back and
-    // kept going" gets acknowledged without a phasic payout for the landing.
-    double restoration = 1.0;
 };
 
 inline const char* regime_name(Regime r) {
     switch (r) {
-        case Regime::Drafting: return "DRAFTING";
-        case Regime::Flow:     return "FLOW";
-        case Regime::Editing:  return "EDITING";
-        case Regime::Stall:    return "STALL";
-        case Regime::Paused:   return "PAUSED";
+        case Regime::Idle:   return "IDLE";
+        case Regime::Typing: return "TYPING";
+        case Regime::Flow:   return "FLOW";
     }
     return "UNKNOWN";
 }
@@ -77,8 +72,6 @@ inline const char* regime_name(Regime r) {
 inline const char* reward_class_name(RewardClass k) {
     switch (k) {
         case RewardClass::MicroReward:    return "micro_reward";
-        case RewardClass::RecoveryReward: return "recovery_reward";
-        case RewardClass::SessionSummary: return "session_summary";
     }
     return "unknown";
 }

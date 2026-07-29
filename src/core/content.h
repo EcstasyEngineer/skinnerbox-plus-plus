@@ -13,6 +13,9 @@ struct ContentFacets {
     double repetition = 0.0;   // repeated-token mass in the recent window (0-1)
     double entropy = 0.0;      // character entropy (bits) of the recent window
     double stall_frac = 0.0;   // "uuuh"-class token fraction (0-1)
+    double bigram_bpc = 0.0;   // English char-bigram cost, bits/char — the
+                               // mash detector: "sdlfkja" has high char
+                               // entropy but implausible English bigrams
     uint32_t window_chars = 0; // how much text the estimates are based on
     // Tail facets over the most recent ~80 chars: dilute filler hides in a
     // long window but is loud at the moment it's typed.

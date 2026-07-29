@@ -1,4 +1,4 @@
-// SkinnerBox++ — telemetry aggregation and flow estimation.
+// SkinnerBox++ — telemetry aggregation, flow estimation, and the FSM.
 // This file is part of SkinnerBox++, released under the GNU GPL v3 or later.
 
 #include "estimator.h"
@@ -20,7 +20,6 @@ double clamp01(double v) { return std::max(0.0, std::min(1.0, v)); }
 // word is part of the hike, not the end of it.
 void FlowEstimator::ingest_insert(double now_s, uint32_t chars) {
     slices_.push_back({now_s, chars, 0});
-    total_inserted_ += chars;
     if (last_activity_s_ < 0.0 || now_s - last_activity_s_ > cfg_.grace_seconds)
         burst_start_s_ = now_s;
     last_activity_s_ = now_s;
@@ -53,7 +52,7 @@ double FlowEstimator::window_sum(double now_s, double window_s, bool inserts) co
     return sum;
 }
 
-AmbientState FlowEstimator::tick(double now_s, bool focused) {
+AmbientState FlowEstimator::tick(double now_s, bool focused, bool gate_ok) {
     trim(now_s);
 
     const double ins60 = window_sum(now_s, kRateWindowS, true);
@@ -62,8 +61,6 @@ AmbientState FlowEstimator::tick(double now_s, bool focused) {
     const double del120 = window_sum(now_s, kRevisionWindowS, false);
 
     const double idle = (last_activity_s_ < 0.0) ? 1e9 : now_s - last_activity_s_;
-    // Burst persists through in-focus pauses within grace; the burst clock
-    // itself doesn't advance while idle beyond the policy boundary.
     const bool in_burst = burst_start_s_ >= 0.0 &&
         idle <= (focused ? cfg_.grace_seconds : cfg_.burst_gap_seconds);
     const double burst =
@@ -86,25 +83,14 @@ AmbientState FlowEstimator::tick(double now_s, bool focused) {
 
     flow_ = cfg_.ewma_alpha * raw + (1.0 - cfg_.ewma_alpha) * flow_;
 
-    // Regime with hysteresis on the FLOW boundary. In-focus idleness between
-    // grace and stall thresholds is PAUSED (neutral), never rewarded, and the
-    // score keeps decaying honestly underneath.
-    Regime regime = state_.regime;
-    if (idle > cfg_.stall_idle_seconds) {
-        regime = Regime::Stall;
-    } else if (focused && idle > cfg_.grace_seconds) {
-        regime = Regime::Paused;
-    } else if (regime == Regime::Flow || regime == Regime::Paused) {
-        regime = (flow_ >= cfg_.flow_exit && state_.regime == Regime::Flow) ||
-                 flow_ >= cfg_.flow_enter
-                     ? Regime::Flow
-                     : Regime::Drafting;
-    } else if (flow_ >= cfg_.flow_enter) {
-        regime = Regime::Flow;
-    } else if (deletion_ratio > cfg_.editing_deletion_ratio && turnover > 40.0) {
-        regime = Regime::Editing;
+    // The FSM. Whole thing. See reward_intent.h for the diagram.
+    Regime regime;
+    if (idle > cfg_.idle_seconds) {
+        regime = Regime::Idle;
     } else {
-        regime = Regime::Drafting;
+        const double bar =
+            state_.regime == Regime::Flow ? cfg_.flow_exit : cfg_.flow_enter;
+        regime = (flow_ >= bar && gate_ok) ? Regime::Flow : Regime::Typing;
     }
 
     state_.flow = flow_;
@@ -113,26 +99,9 @@ AmbientState FlowEstimator::tick(double now_s, bool focused) {
     state_.deletion_ratio = deletion_ratio;
     state_.burst_seconds = std::max(0.0, burst);
     state_.idle_seconds = std::min(idle, 1e6);
-    // Earned restoration: a stall zeroes it; it climbs only with cumulative
-    // ACTIVE time (not wall-clock, not a single burst), so sitting idle or
-    // typing one qualifying sentence doesn't buy the warmth back.
-    const double dt = (last_tick_s_ < 0.0) ? 0.0 : now_s - last_tick_s_;
-    last_tick_s_ = now_s;
-    if (regime == Regime::Stall) {
-        restoration_ = 0.0;
-        active_since_stall_s_ = 0.0;
-    } else if (restoration_ < 1.0) {
-        const bool actively_writing =
-            idle <= cfg_.burst_gap_seconds && net_cpm > 0.0;
-        if (actively_writing) active_since_stall_s_ += dt;
-        restoration_ = std::min(
-            1.0, active_since_stall_s_ / std::max(1.0, cfg_.restore_seconds));
-    }
-
     state_.focus_losses = static_cast<uint32_t>(focus_losses_.size());
-    state_.total_inserted = total_inserted_;
-    state_.restoration = restoration_;
-    // repetition/entropy/stall_frac/gate_ok are filled by the engine.
+    state_.gate_ok = gate_ok;
+    // repetition/entropy/stall_frac are filled by the engine.
     return state_;
 }
 

@@ -4,3 +4,7 @@ build/
 *.lib
 *.exp
 *.pdb
+experiments/.venv/
+experiments/data/
+experiments/results/
+__pycache__/

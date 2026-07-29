@@ -10,7 +10,18 @@
 #include <map>
 #include <vector>
 
+#include "bigram_en.h"
+
 namespace sbpp {
+
+namespace {
+// a-z -> 0-25, everything else folds to 26 (space).
+inline int bigram_idx(char c) {
+    const unsigned char u = static_cast<unsigned char>(std::tolower(
+        static_cast<unsigned char>(c)));
+    return (u >= 'a' && u <= 'z') ? u - 'a' : 26;
+}
+} // namespace
 
 void ContentWindow::add_text(const char* utf8, size_t len) {
     if (!utf8) return;
@@ -31,6 +42,25 @@ ContentFacets ContentWindow::facets() const {
         if (!k) continue;
         const double p = k / n;
         f.entropy -= p * std::log2(p);
+    }
+
+    // English char-bigram cost (mean bits/char): the keyboard-mash detector.
+    // Char entropy can't see mash — "sdlfkja" is diverse — but its bigrams
+    // are wildly implausible English. Space-space pairs are skipped so runs
+    // of whitespace/punctuation don't dilute the average.
+    {
+        int prev = -1;
+        double bits = 0.0;
+        uint32_t n_pairs = 0;
+        for (char c : buf_) {
+            const int idx = bigram_idx(c);
+            if (prev >= 0 && !(prev == 26 && idx == 26)) {
+                bits += kBigramBits[prev][idx];
+                ++n_pairs;
+            }
+            prev = idx;
+        }
+        if (n_pairs > 0) f.bigram_bpc = bits / n_pairs;
     }
 
     // Tokenize (lowercased alpha runs).
@@ -78,12 +108,14 @@ ContentFacets ContentWindow::facets() const {
         if (std::isalpha(static_cast<unsigned char>(c))) {
             tcur.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
         } else if (!tcur.empty()) {
-            if (tcur.size() >= 3) // ignore stopword-length tokens ("the the")
+            // >= 4: "the"/"and" legitimately land 3+ times in an 80-char tail
+            // of normal prose; the target is "duper duper duper", not English.
+            if (tcur.size() >= 4)
                 f.tail_max_token = std::max(f.tail_max_token, ++tail_counts[tcur]);
             tcur.clear();
         }
     }
-    if (tcur.size() >= 3)
+    if (tcur.size() >= 4)
         f.tail_max_token = std::max(f.tail_max_token, ++tail_counts[tcur]);
     return f;
 }

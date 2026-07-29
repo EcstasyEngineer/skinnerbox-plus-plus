@@ -1,6 +1,7 @@
 @echo off
 rem SkinnerBox++ build — locates MSVC via vswhere, emits build\SkinnerBoxPP.dll (x64).
 setlocal enabledelayedexpansion
+cd /d "%~dp0"
 
 set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
 if not exist "%VSWHERE%" (
@@ -18,11 +19,10 @@ if not exist build mkdir build
 cl /nologo /W4 /EHsc /std:c++17 /O2 /utf-8 /DUNICODE /D_UNICODE /DNOMINMAX ^
    /Fobuild\ /Febuild\SkinnerBoxPP.dll /LD ^
    src\core\estimator.cpp src\core\policy.cpp src\core\content.cpp ^
-   src\adapters\log_adapter.cpp src\adapters\audio_adapter.cpp ^
-   src\adapters\raw_log.cpp src\adapters\mcp_adapter.cpp ^
+   src\adapters\log_adapter.cpp src\adapters\raw_log.cpp ^
    src\adapters\intiface_adapter.cpp ^
    src\plugin\npp_visual_adapter.cpp src\plugin\plugin_main.cpp ^
-   user32.lib shell32.lib winmm.lib winhttp.lib
+   user32.lib shell32.lib winhttp.lib
 if errorlevel 1 exit /b 1
 echo.
 echo Built build\SkinnerBoxPP.dll
@@ -33,3 +33,12 @@ cl /nologo /W4 /EHsc /std:c++17 /O2 /utf-8 /DNOMINMAX ^
    test\replay.cpp src\core\estimator.cpp src\core\policy.cpp src\core\content.cpp
 if errorlevel 1 exit /b 1
 echo Built build\replay.exe
+
+rem Interactive console demo (core + Intiface, no Notepad++ dependencies).
+cl /nologo /W4 /EHsc /std:c++17 /O2 /utf-8 /DNOMINMAX ^
+   /Fobuild\ /Febuild\demo.exe ^
+   test\demo.cpp src\core\estimator.cpp src\core\policy.cpp src\core\content.cpp ^
+   src\adapters\intiface_adapter.cpp ^
+   winhttp.lib
+if errorlevel 1 exit /b 1
+echo Built build\demo.exe
