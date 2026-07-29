@@ -24,10 +24,12 @@
 #include "../adapters/raw_log.h"
 #include "npp_visual_adapter.h"
 
+#include <string>
+
 namespace {
 
 const wchar_t kPluginName[] = L"SkinnerBox++";
-constexpr int kNbFunc = 5;
+constexpr int kNbFunc = 10;
 
 NppData g_npp;
 FuncItem g_funcs[kNbFunc];
@@ -80,6 +82,14 @@ void load_config() {
     g_cfg.recovery_chars = read_ini_double(L"policy", L"recovery_chars", d.recovery_chars);
     g_cfg.recovery_window_s =
         read_ini_double(L"policy", L"recovery_window_s", d.recovery_window_s);
+    g_cfg.grace_seconds = read_ini_double(L"flow", L"grace_seconds", d.grace_seconds);
+    g_cfg.slop_repetition_max =
+        read_ini_double(L"gate", L"slop_repetition_max", d.slop_repetition_max);
+    g_cfg.slop_entropy_min =
+        read_ini_double(L"gate", L"slop_entropy_min", d.slop_entropy_min);
+    g_cfg.slop_stall_frac_max =
+        read_ini_double(L"gate", L"slop_stall_frac_max", d.slop_stall_frac_max);
+    g_cfg.gate_min_chars = read_ini_double(L"gate", L"gate_min_chars", d.gate_min_chars);
     g_cfg.visual_enabled = read_ini_double(L"channels", L"visual", 1) != 0;
     g_cfg.audio_enabled = read_ini_double(L"channels", L"audio", 1) != 0;
     g_cfg.statusbar_enabled = read_ini_double(L"channels", L"statusbar", 1) != 0;
@@ -105,6 +115,11 @@ void persist_config() {
     write_ini_double(L"policy", L"withhold_probability", g_cfg.withhold_probability);
     write_ini_double(L"policy", L"recovery_chars", g_cfg.recovery_chars);
     write_ini_double(L"policy", L"recovery_window_s", g_cfg.recovery_window_s);
+    write_ini_double(L"flow", L"grace_seconds", g_cfg.grace_seconds);
+    write_ini_double(L"gate", L"slop_repetition_max", g_cfg.slop_repetition_max);
+    write_ini_double(L"gate", L"slop_entropy_min", g_cfg.slop_entropy_min);
+    write_ini_double(L"gate", L"slop_stall_frac_max", g_cfg.slop_stall_frac_max);
+    write_ini_double(L"gate", L"gate_min_chars", g_cfg.gate_min_chars);
     write_ini_double(L"channels", L"visual", g_cfg.visual_enabled ? 1 : 0);
     write_ini_double(L"channels", L"audio", g_cfg.audio_enabled ? 1 : 0);
     write_ini_double(L"channels", L"statusbar", g_cfg.statusbar_enabled ? 1 : 0);
@@ -134,7 +149,7 @@ void CALLBACK timer_proc(HWND, UINT, UINT_PTR, DWORD) {
         fg && GetAncestor(fg, GA_ROOT) == GetAncestor(g_npp._nppHandle, GA_ROOT);
     if (g_focus_was_here && !here) g_engine->on_focus_loss(t);
     g_focus_was_here = here;
-    g_engine->tick(t);
+    g_engine->tick(t, here);
     if (g_rawlog) g_rawlog->tick(t, g_engine->state());
 }
 
@@ -204,6 +219,87 @@ void cmd_open_logs() {
                   SW_SHOWNORMAL);
 }
 
+void restart_engine_if_running() {
+    if (g_engine) {
+        stop_engine();
+        start_engine();
+    }
+}
+
+void cmd_toggle_rawlog() {
+    g_cfg.raw_log_enabled = !g_cfg.raw_log_enabled;
+    persist_config();
+    restart_engine_if_running();
+    SendMessage(g_npp._nppHandle, NPPM_SETMENUITEMCHECK, g_funcs[4]._cmdID,
+                g_cfg.raw_log_enabled ? TRUE : FALSE);
+}
+
+void cmd_toggle_capture() {
+    g_cfg.capture_text = !g_cfg.capture_text;
+    persist_config();
+    restart_engine_if_running();
+    SendMessage(g_npp._nppHandle, NPPM_SETMENUITEMCHECK, g_funcs[5]._cmdID,
+                g_cfg.capture_text ? TRUE : FALSE);
+}
+
+// Self-label shortcuts: append to labels.jsonl with current engine state and
+// (only when text capture is on) the labeled text — selection if present,
+// otherwise the ~240 chars before the caret.
+void write_label(const char* label) {
+    CreateDirectoryW(g_log_dir.c_str(), nullptr);
+    FILE* f = _wfsopen((g_log_dir + L"\\labels.jsonl").c_str(), L"ab", _SH_DENYNO);
+    if (!f) return;
+    std::time_t now = std::time(nullptr);
+    std::tm tm{};
+    localtime_s(&tm, &now);
+    char ts[32];
+    std::strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%S", &tm);
+    const sbpp::AmbientState s =
+        g_engine ? g_engine->state() : sbpp::AmbientState{};
+    std::string out = "{\"ts\":\"";
+    out += ts;
+    out += "\",\"label\":\"";
+    out += label;
+    char num[160];
+    snprintf(num, sizeof(num),
+             "\",\"flow\":%.3f,\"regime\":\"%s\",\"gate_ok\":%s", s.flow,
+             sbpp::regime_name(s.regime), s.gate_ok ? "true" : "false");
+    out += num;
+    if (g_cfg.capture_text) {
+        int which = 0;
+        SendMessage(g_npp._nppHandle, NPPM_GETCURRENTSCINTILLA, 0,
+                    reinterpret_cast<LPARAM>(&which));
+        HWND sci = which == 0 ? g_npp._scintillaMainHandle
+                              : g_npp._scintillaSecondHandle;
+        const LRESULT selStart = SendMessage(sci, SCI_GETSELECTIONSTART, 0, 0);
+        const LRESULT selEnd = SendMessage(sci, SCI_GETSELECTIONEND, 0, 0);
+        LRESULT a = selStart, b = selEnd;
+        if (a == b) { // no selection: trailing context before the caret
+            b = SendMessage(sci, SCI_GETCURRENTPOS, 0, 0);
+            a = b > 240 ? b - 240 : 0;
+        }
+        if (b > a && b - a < 2000) {
+            std::string text(static_cast<size_t>(b - a), '\0');
+            Sci_TextRangeFull tr;
+            tr.chrg.cpMin = static_cast<Sci_Position>(a);
+            tr.chrg.cpMax = static_cast<Sci_Position>(b);
+            tr.lpstrText = text.data();
+            SendMessage(sci, SCI_GETTEXTRANGEFULL, 0,
+                        reinterpret_cast<LPARAM>(&tr));
+            out += ",\"text\":\"";
+            sbpp::RawLog::append_escaped(out, text.c_str(), text.size());
+            out += "\"";
+        }
+    }
+    out += "}\n";
+    std::fwrite(out.data(), 1, out.size(), f);
+    std::fclose(f);
+}
+
+void cmd_mark_good() { write_label("good"); }
+void cmd_mark_meh() { write_label("meh"); }
+void cmd_mark_slop() { write_label("slop"); }
+
 void cmd_about() {
     MessageBoxW(g_npp._nppHandle,
                 L"SkinnerBox++\n\n"
@@ -239,18 +335,26 @@ extern "C" __declspec(dllexport) void setInfo(NppData data) {
 extern "C" __declspec(dllexport) const TCHAR* getName() { return kPluginName; }
 
 extern "C" __declspec(dllexport) FuncItem* getFuncsArray(int* count) {
+    static ShortcutKey kGood{true, true, false, 'G'};
+    static ShortcutKey kMeh{true, true, false, 'M'};
+    static ShortcutKey kSlop{true, true, false, 'B'};
     auto set = [](FuncItem& item, const wchar_t* name, PFUNCPLUGINCMD fn,
-                  bool checked) {
+                  bool checked, ShortcutKey* key = nullptr) {
         wcsncpy_s(item._itemName, name, _TRUNCATE);
         item._pFunc = fn;
         item._init2Check = checked;
-        item._pShKey = nullptr;
+        item._pShKey = key;
     };
     set(g_funcs[0], L"Enable SkinnerBox++", cmd_toggle, g_enabled);
     set(g_funcs[1], L"Reload config", cmd_reload_config, false);
     set(g_funcs[2], L"Open config", cmd_open_config, false);
     set(g_funcs[3], L"Open session logs", cmd_open_logs, false);
-    set(g_funcs[4], L"About", cmd_about, false);
+    set(g_funcs[4], L"Raw telemetry log", cmd_toggle_rawlog, g_cfg.raw_log_enabled);
+    set(g_funcs[5], L"Capture text in raw log", cmd_toggle_capture, g_cfg.capture_text);
+    set(g_funcs[6], L"Mark: that was good", cmd_mark_good, false, &kGood);
+    set(g_funcs[7], L"Mark: merely functional", cmd_mark_meh, false, &kMeh);
+    set(g_funcs[8], L"Mark: slop", cmd_mark_slop, false, &kSlop);
+    set(g_funcs[9], L"About", cmd_about, false);
     *count = kNbFunc;
     return g_funcs;
 }
@@ -274,7 +378,7 @@ extern "C" __declspec(dllexport) void beNotified(SCNotification* n) {
             const auto chars =
                 static_cast<uint32_t>(n->length > 256 ? 256 : n->length);
             if (n->modificationType & SC_MOD_INSERTTEXT) {
-                g_engine->on_insert(t, chars);
+                g_engine->on_insert(t, chars, n->text, chars);
                 if (g_rawlog)
                     g_rawlog->event(t, "ins", n->position, n->length, n->text,
                                     static_cast<size_t>(n->length));

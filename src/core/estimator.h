@@ -23,8 +23,9 @@ public:
     void ingest_delete(double now_s, uint32_t chars);
     void note_focus_loss(double now_s);
 
-    // Advance one tick. Returns the fresh ambient snapshot.
-    AmbientState tick(double now_s);
+    // Advance one tick. focused = editor currently holds foreground focus;
+    // grace-window pause handling only applies while focused.
+    AmbientState tick(double now_s, bool focused);
 
     const AmbientState& state() const { return state_; }
     double last_activity() const { return last_activity_s_; }
@@ -38,7 +39,7 @@ private:
     const Config& cfg_;
     std::deque<Slice> slices_;        // per-event aggregates, trimmed to 300 s
     std::deque<double> focus_losses_; // timestamps, trimmed to 300 s
-    AmbientState state_{0.0, Regime::Drafting, 0.0, 0.0, 0.0, 0.0, 0};
+    AmbientState state_{};
     double flow_ = 0.0;               // EWMA accumulator
     double last_activity_s_ = -1.0;   // last insert/delete timestamp
     double burst_start_s_ = -1.0;     // start of current typing burst

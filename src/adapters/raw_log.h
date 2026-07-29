@@ -25,9 +25,11 @@ public:
                const char* text_utf8, size_t text_len);
     void tick(double t, const AmbientState& s);
 
+    // JSON string-escape helper (shared with the label writer in the host).
+    static void append_escaped(std::string& out, const char* s, size_t n);
+
 private:
     void line(const std::string& json);
-    static void append_escaped(std::string& out, const char* s, size_t n);
 
     FILE* file_ = nullptr;
     bool capture_text_;

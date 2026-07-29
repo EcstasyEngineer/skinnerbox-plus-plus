@@ -57,12 +57,14 @@ void RawLog::event(double t, const char* type, long long pos, long long len,
 
 void RawLog::tick(double t, const AmbientState& s) {
     if (!file_) return;
-    char buf[256];
+    char buf[384];
     snprintf(buf, sizeof(buf),
              "{\"t\":%.2f,\"ev\":\"tick\",\"flow\":%.4f,\"regime\":\"%s\","
-             "\"cpm\":%.1f,\"del\":%.4f,\"burst\":%.1f,\"idle\":%.1f,\"focus\":%u}",
+             "\"cpm\":%.1f,\"del\":%.4f,\"burst\":%.1f,\"idle\":%.1f,\"focus\":%u,"
+             "\"rep\":%.3f,\"ent\":%.2f,\"stall\":%.3f,\"gate\":%s}",
              t, s.flow, regime_name(s.regime), s.net_rate_cpm, s.deletion_ratio,
-             s.burst_seconds, s.idle_seconds, s.focus_losses);
+             s.burst_seconds, s.idle_seconds, s.focus_losses,
+             s.repetition, s.entropy, s.stall_frac, s.gate_ok ? "true" : "false");
     line(buf);
 }
 

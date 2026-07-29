@@ -17,7 +17,10 @@ struct Config {
     double flow_exit = 0.50;         // ...leave FLOW below this
     double editing_deletion_ratio = 0.45; // above this the regime reads EDITING
     double stall_idle_seconds = 30.0;     // idle beyond this is a STALL
-    double burst_gap_seconds = 3.0;  // pause longer than this ends a typing burst
+    double burst_gap_seconds = 3.0;  // policy boundary: short natural pause
+    double grace_seconds = 9.0;      // in-focus idle grace: burst continuity
+                                     // survives pauses shorter than this, and
+                                     // score starvation starts only beyond it
 
     // --- reward policy ---
     double mean_reward_interval_s = 420.0; // variable-interval average (7 min)
@@ -26,6 +29,13 @@ struct Config {
     double withhold_probability = 0.15;    // counterfactual no-reward fraction
     double recovery_chars = 120.0;   // chars within recovery window after stall...
     double recovery_window_s = 60.0; // ...that count as a STALL recovery
+
+    // --- content gate (must-pass conjunction on reward eligibility) ---
+    double slop_repetition_max = 0.55; // repeated-token mass above this fails
+    double slop_entropy_min = 3.4;     // char entropy (bits) below this fails
+    double slop_stall_frac_max = 0.06; // "uuuh"-class token share above fails
+    double gate_min_chars = 80.0;      // less recent text than this = no
+                                       // content evidence = gate fails closed
 
     // --- channels ---
     bool visual_enabled = true;

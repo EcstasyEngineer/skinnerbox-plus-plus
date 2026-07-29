@@ -33,16 +33,24 @@ struct RewardIntent {
 
 // Continuous (tonic) state broadcast on every engine tick. Adapters use this
 // for slow ambient feedback; it is weather, not a payout.
-enum class Regime { Drafting, Flow, Editing, Stall };
+// Paused = in-focus idle past the grace window but short of a stall: the
+// environment goes neutral (not dimmed, not held) while the writer thinks.
+enum class Regime { Drafting, Flow, Editing, Stall, Paused };
 
 struct AmbientState {
-    double flow;            // smoothed 0-1 flow estimate
-    Regime regime;
-    double net_rate_cpm;    // net chars/minute over the short window
-    double deletion_ratio;  // deleted / (inserted + deleted), revision window
-    double burst_seconds;   // length of the current uninterrupted typing burst
-    double idle_seconds;    // time since the last document modification
-    uint32_t focus_losses;  // focus departures in the long window
+    double flow = 0.0;      // smoothed 0-1 flow estimate
+    Regime regime = Regime::Drafting;
+    double net_rate_cpm = 0.0;   // net chars/minute over the short window
+    double deletion_ratio = 0.0; // deleted / (inserted + deleted)
+    double burst_seconds = 0.0;  // length of the current typing burst
+    double idle_seconds = 0.0;   // time since the last document modification
+    uint32_t focus_losses = 0;   // focus departures in the long window
+    // Content facets over recently typed text (see core/content.h) and the
+    // must-pass gate verdict computed from them. Rewards require gate_ok.
+    double repetition = 0.0;
+    double entropy = 0.0;
+    double stall_frac = 0.0;
+    bool gate_ok = false;
 };
 
 inline const char* regime_name(Regime r) {
@@ -51,6 +59,7 @@ inline const char* regime_name(Regime r) {
         case Regime::Flow:     return "FLOW";
         case Regime::Editing:  return "EDITING";
         case Regime::Stall:    return "STALL";
+        case Regime::Paused:   return "PAUSED";
     }
     return "UNKNOWN";
 }

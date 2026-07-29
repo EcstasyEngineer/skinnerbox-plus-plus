@@ -17,7 +17,7 @@ call "%VSPATH%\VC\Auxiliary\Build\vcvars64.bat" >nul || exit /b 1
 if not exist build mkdir build
 cl /nologo /W4 /EHsc /std:c++17 /O2 /utf-8 /DUNICODE /D_UNICODE /DNOMINMAX ^
    /Fobuild\ /Febuild\SkinnerBoxPP.dll /LD ^
-   src\core\estimator.cpp src\core\policy.cpp ^
+   src\core\estimator.cpp src\core\policy.cpp src\core\content.cpp ^
    src\adapters\log_adapter.cpp src\adapters\audio_adapter.cpp ^
    src\adapters\raw_log.cpp ^
    src\plugin\npp_visual_adapter.cpp src\plugin\plugin_main.cpp ^
@@ -25,3 +25,10 @@ cl /nologo /W4 /EHsc /std:c++17 /O2 /utf-8 /DUNICODE /D_UNICODE /DNOMINMAX ^
 if errorlevel 1 exit /b 1
 echo.
 echo Built build\SkinnerBoxPP.dll
+
+rem Offline replay harness (core only, no Notepad++ dependencies).
+cl /nologo /W4 /EHsc /std:c++17 /O2 /utf-8 /DNOMINMAX ^
+   /Fobuild\ /Febuild\replay.exe ^
+   test\replay.cpp src\core\estimator.cpp src\core\policy.cpp src\core\content.cpp
+if errorlevel 1 exit /b 1
+echo Built build\replay.exe

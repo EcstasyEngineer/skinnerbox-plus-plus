@@ -4,6 +4,7 @@
 #pragma once
 
 #include <cstdio>
+#include <ctime>
 #include <string>
 
 #include "../core/adapter.h"
@@ -32,6 +33,9 @@ private:
     int ambient_downsample_ = 0;
     Regime last_regime_ = Regime::Drafting;
     bool regime_logged_once_ = false;
+    // Pause dataset: entry time of the current PAUSED/STALL episode, if any.
+    std::time_t pause_started_ = 0;
+    Regime pause_kind_ = Regime::Drafting;
 };
 
 } // namespace sbpp
