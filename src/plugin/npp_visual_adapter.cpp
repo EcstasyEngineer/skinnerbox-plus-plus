@@ -74,9 +74,15 @@ void NppVisualAdapter::set_statusbar(const AmbientState& s) {
                  cfg_.debug_telemetry ? "REC  " : "", s.flow,
                  regime_name(s.regime), message_.c_str(), hw);
     } else {
+        // Name the failing gate facet ("echo", "repeats", ...) so the writer
+        // knows WHAT to change, not just that something is wrong.
+        char gate[24] = "";
+        if (!s.gate_ok)
+            snprintf(gate, sizeof(gate), " (%s)",
+                     s.gate_fail && s.gate_fail[0] ? s.gate_fail : "gate x");
         swprintf(text, 224, L"%hs%.2f %hs%hs · out %.2f · %s",
                  cfg_.debug_telemetry ? "REC  " : "", s.flow,
-                 regime_name(s.regime), s.gate_ok ? "" : " (gate x)",
+                 regime_name(s.regime), gate,
                  hw_ ? hw_->current_output() : 0.0, hw);
     }
     if (last_status_ == text) return;

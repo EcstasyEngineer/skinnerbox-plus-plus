@@ -58,6 +58,10 @@ struct AmbientState {
     double stall_frac = 0.0;
     double bigram_bpc = 0.0;
     bool gate_ok = false;
+    // First failing gate facet as a short writer-facing tag ("thin",
+    // "repeats", "flat", "filler", "mash", "drone", "echo"); empty while the
+    // gate passes. Always points at static storage — safe to copy around.
+    const char* gate_fail = "";
 };
 
 inline const char* regime_name(Regime r) {

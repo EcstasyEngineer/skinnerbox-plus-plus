@@ -42,20 +42,24 @@ public:
         last_tick_s_ = now_s;
         // Must-pass conjunction: no content evidence means no reward (fails
         // closed), and any slop signal fails it. Momentum alone can never
-        // reach FLOW.
+        // reach FLOW. Evaluated as a first-fail chain so the failing facet
+        // can be NAMED to the writer instead of an anonymous "gate x".
         const ContentFacets cf = content_.facets();
-        const bool gate_ok = cf.window_chars >= cfg_.gate_min_chars &&
-                             cf.repetition <= cfg_.slop_repetition_max &&
-                             cf.entropy >= cfg_.slop_entropy_min &&
-                             cf.stall_frac <= cfg_.slop_stall_frac_max &&
-                             cf.bigram_bpc <= cfg_.slop_bigram_bpc_max &&
-                             cf.tail_stall_run < 6 &&
-                             cf.tail_max_token < 3;
+        const char* gate_fail =
+            cf.window_chars < cfg_.gate_min_chars      ? "thin"    :
+            cf.repetition   > cfg_.slop_repetition_max ? "repeats" :
+            cf.entropy      < cfg_.slop_entropy_min    ? "flat"    :
+            cf.stall_frac   > cfg_.slop_stall_frac_max ? "filler"  :
+            cf.bigram_bpc   > cfg_.slop_bigram_bpc_max ? "mash"    :
+            cf.tail_stall_run >= 6                     ? "drone"   :
+            cf.tail_max_token >= 3                     ? "echo"    : "";
+        const bool gate_ok = gate_fail[0] == '\0';
         AmbientState state = estimator_.tick(now_s, focused, gate_ok);
         state.repetition = cf.repetition;
         state.entropy = cf.entropy;
         state.stall_frac = cf.stall_frac;
         state.bigram_bpc = cf.bigram_bpc;
+        state.gate_fail = gate_fail;
         for (auto& a : adapters_) a->ambient(state);
         if (auto intent = policy_.tick(now_s, dt, state)) {
             for (auto& a : adapters_) a->deliver(*intent);

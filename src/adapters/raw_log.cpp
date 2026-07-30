@@ -61,11 +61,12 @@ void RawLog::tick(double t, const AmbientState& s) {
     snprintf(buf, sizeof(buf),
              "{\"t\":%.2f,\"ev\":\"tick\",\"flow\":%.4f,\"regime\":\"%s\","
              "\"cpm\":%.1f,\"del\":%.4f,\"burst\":%.1f,\"idle\":%.1f,\"focus\":%u,"
-             "\"rep\":%.3f,\"ent\":%.2f,\"stall\":%.3f,\"bpc\":%.2f,\"gate\":%s}",
+             "\"rep\":%.3f,\"ent\":%.2f,\"stall\":%.3f,\"bpc\":%.2f,"
+             "\"gate\":%s,\"fail\":\"%s\"}",
              t, s.flow, regime_name(s.regime), s.net_rate_cpm, s.deletion_ratio,
              s.burst_seconds, s.idle_seconds, s.focus_losses,
              s.repetition, s.entropy, s.stall_frac, s.bigram_bpc,
-             s.gate_ok ? "true" : "false");
+             s.gate_ok ? "true" : "false", s.gate_fail ? s.gate_fail : "");
     line(buf);
 }
 

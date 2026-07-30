@@ -10,6 +10,7 @@
 #include <windows.h>
 #include <shellapi.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <ctime>
 #include <memory>
@@ -27,7 +28,7 @@
 namespace {
 
 const wchar_t kPluginName[] = L"SkinnerBox++";
-constexpr int kNbFunc = 8;
+constexpr int kNbFunc = 9;
 
 NppData g_npp;
 FuncItem g_funcs[kNbFunc];
@@ -85,6 +86,18 @@ void load_config() {
     g_cfg.mean_reward_interval_s =
         read_ini_double(L"policy", L"mean_reward_interval_s", d.mean_reward_interval_s);
     g_cfg.min_cooldown_s = read_ini_double(L"policy", L"min_cooldown_s", d.min_cooldown_s);
+    // Felt dial (issue #14): generosity = expected buzzes per 10 minutes of
+    // qualified FLOW. When present (>0) it is canonical and compiles onto the
+    // VI mean; persist_config always rewrites both keys consistently, so the
+    // two only disagree after a hand edit — and then generosity wins.
+    // min_flow_hold_s stays independent on purpose: it is eligibility
+    // latency, not reward density.
+    {
+        const double generosity = read_ini_double(L"policy", L"generosity", 0);
+        if (generosity > 0.0)
+            g_cfg.mean_reward_interval_s =
+                std::max(600.0 / generosity, g_cfg.min_cooldown_s);
+    }
     g_cfg.visual_enabled = read_ini_double(L"channels", L"visual", 1) != 0;
     g_cfg.statusbar_enabled = read_ini_double(L"channels", L"statusbar", 1) != 0;
     g_cfg.bloom_ms =
@@ -96,6 +109,14 @@ void load_config() {
         read_ini_double(L"intiface", L"enabled", d.intiface_enabled ? 1 : 0) != 0;
     g_cfg.intiface_max_intensity = read_ini_double(
         L"intiface", L"max_intensity", d.intiface_max_intensity);
+    // Felt dial (issue #14): strength = peak intensity, 0-1 of device range.
+    // Canonical over max_intensity when present; same persist contract as
+    // generosity above.
+    {
+        const double strength = read_ini_double(L"intiface", L"strength", -1);
+        if (strength >= 0.0)
+            g_cfg.intiface_max_intensity = std::min(1.0, strength);
+    }
     g_cfg.intiface_ms = static_cast<uint32_t>(
         read_ini_double(L"intiface", L"buzz_ms", d.intiface_ms));
     g_cfg.intiface_flow_vibe =
@@ -129,6 +150,9 @@ void persist_config() {
     write_ini_double(L"policy", L"min_flow_hold_s", g_cfg.min_flow_hold_s);
     write_ini_double(L"policy", L"mean_reward_interval_s", g_cfg.mean_reward_interval_s);
     write_ini_double(L"policy", L"min_cooldown_s", g_cfg.min_cooldown_s);
+    // Felt dials are persisted alongside their compiled raw keys so the INI
+    // never holds two disagreeing sources of truth (issue #14).
+    write_ini_double(L"policy", L"generosity", 600.0 / g_cfg.mean_reward_interval_s);
     write_ini_double(L"channels", L"visual", g_cfg.visual_enabled ? 1 : 0);
     write_ini_double(L"channels", L"statusbar", g_cfg.statusbar_enabled ? 1 : 0);
     write_ini_double(L"channels", L"bloom_ms", g_cfg.bloom_ms);
@@ -136,6 +160,7 @@ void persist_config() {
     write_ini_double(L"channels", L"message_ms", g_cfg.message_ms);
     write_ini_double(L"intiface", L"enabled", g_cfg.intiface_enabled ? 1 : 0);
     write_ini_double(L"intiface", L"max_intensity", g_cfg.intiface_max_intensity);
+    write_ini_double(L"intiface", L"strength", g_cfg.intiface_max_intensity);
     write_ini_double(L"intiface", L"buzz_ms", g_cfg.intiface_ms);
     write_ini_double(L"intiface", L"flow_vibe", g_cfg.intiface_flow_vibe ? 1 : 0);
     write_ini_double(L"intiface", L"flow_vibe_level", g_cfg.intiface_flow_vibe_level);
@@ -174,7 +199,13 @@ void start_engine() {
     const uint64_t seed = GetTickCount64() ^ (static_cast<uint64_t>(GetCurrentProcessId()) << 32);
     const std::wstring base = session_base_name();
     g_engine = std::make_unique<sbpp::FlowEngine>(g_cfg, seed);
-    g_engine->add_adapter(std::make_unique<sbpp::LogAdapter>(base + L".jsonl"));
+    {
+        auto log = std::make_unique<sbpp::LogAdapter>(base + L".jsonl");
+        log->log_config(600.0 / g_cfg.mean_reward_interval_s,
+                        g_cfg.mean_reward_interval_s, g_cfg.min_flow_hold_s,
+                        g_cfg.intiface_max_intensity);
+        g_engine->add_adapter(std::move(log));
+    }
     if (g_cfg.debug_telemetry)
         g_rawlog = std::make_unique<sbpp::RawLog>(base + L".raw.jsonl",
                                                   /*capture_text=*/true);
@@ -255,6 +286,17 @@ void cmd_toggle_debug() {
     }
     SendMessage(g_npp._nppHandle, NPPM_SETMENUITEMCHECK, g_funcs[4]._cmdID,
                 g_cfg.debug_telemetry ? TRUE : FALSE);
+}
+
+void cmd_toggle_flow_vibe() {
+    g_cfg.intiface_flow_vibe = !g_cfg.intiface_flow_vibe;
+    persist_config();
+    if (g_engine) { // the Intiface adapter snapshots settings at engine start
+        stop_engine();
+        start_engine();
+    }
+    SendMessage(g_npp._nppHandle, NPPM_SETMENUITEMCHECK, g_funcs[5]._cmdID,
+                g_cfg.intiface_flow_vibe ? TRUE : FALSE);
 }
 
 void cmd_intiface_test() {
@@ -356,9 +398,11 @@ extern "C" __declspec(dllexport) FuncItem* getFuncsArray(int* count) {
     set(g_funcs[3], L"Open session logs", cmd_open_logs, false);
     set(g_funcs[4], L"Debug telemetry (records typed text)", cmd_toggle_debug,
         g_cfg.debug_telemetry);
-    set(g_funcs[5], L"Intiface: test buzz", cmd_intiface_test, false);
-    set(g_funcs[6], L"Intiface: reconnect", cmd_intiface_reconnect, false);
-    set(g_funcs[7], L"About", cmd_about, false);
+    set(g_funcs[5], L"Intiface: vibe while in FLOW", cmd_toggle_flow_vibe,
+        g_cfg.intiface_flow_vibe);
+    set(g_funcs[6], L"Intiface: test buzz", cmd_intiface_test, false);
+    set(g_funcs[7], L"Intiface: reconnect", cmd_intiface_reconnect, false);
+    set(g_funcs[8], L"About", cmd_about, false);
     *count = kNbFunc;
     return g_funcs;
 }
