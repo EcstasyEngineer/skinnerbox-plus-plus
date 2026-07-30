@@ -94,3 +94,37 @@ engine stays 100% gated, zero rewards.
 4. Honest limits: junk classes are synthetic (adversarial-human junk may
    differ); real-user n is one writer, 10 windows; "creative vs government
    prose" is a genre axis, not a quality axis.
+
+## Addendum — modern tiny-model sweep (experiment 04)
+
+The deleted probe2.py "2026 sub-1GB model sweep" was methodology noise
+(leaky LOO on 39 judge labels). Re-run with this experiment's protocol
+(`model_sweep.py`): per model, the junk surprisal band + register separation
+(fiction / legal-academic / user-rambling; mid-layer mean-pooled hidden
+states, nearest centroid, leave-one-source-out CV, fixed mid-layer rule —
+no layer selection anywhere).
+
+| model | ms/win (CPU) | mash | loop | repeat | filler | stopword | register acc |
+|---|---|---|---|---|---|---|---|
+| GPT-2 124M (2019) | 347 | 1.000 | 1.000 | 1.000 | 0.882 | 0.809 | **0.953** |
+| SmolLM2-135M (2024) | 397 | 1.000 | 1.000 | 0.977 | 0.895 | 0.823 | 0.837 |
+| Qwen3-0.6B-Base (2025) | 1780 | 1.000 | 1.000 | 1.000 | **0.509** | 0.588 | 0.874 |
+
+Findings:
+
+1. **No modern tiny model beats GPT-2 on either task.** GPT-2's mid-layer
+   states separate the three registers at 0.953 (fiction 0.99 / legal 0.90 /
+   rambling 1.00) — best of the three, at 5× less compute than Qwen3.
+2. **Stronger LMs are WORSE junk-band detectors.** Qwen3-0.6B collapses on
+   stall filler (0.51 ≈ chance) and stopword streams (0.59): a better model
+   finds degenerate-but-English text about as predictable as prose, so its
+   surprisal band can't separate them. The band signal *depends on* the
+   model being mediocre. (Filler/stopwords are caught lexically anyway —
+   this matters only if the band were the sole gate.)
+3. Caveats: fixed mid-layer + nearest centroid is deliberately selection-free
+   — a per-model tuned layer/probe could reorder the ranking, but that
+   tuning is exactly what leaked last time; the honest comparison says GPT-2
+   is not the bottleneck. Register n = 8 sources, one writer's rambling.
+
+Implication for the register gate (issue #11): the LM rung is viable and
+GPT-2-sized — but try the POS/n-gram rungs first; they're free.
