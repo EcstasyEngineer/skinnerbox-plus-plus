@@ -54,6 +54,9 @@ std::optional<RewardIntent> RewardPolicy::tick(double now_s, double dt_s,
 
     // --- regularity tier ("yellow coin"): fixed-ratio on net typed chars,
     // gate-free, active whenever the writer is producing at all ---
+    // Zero doubles as the unarmed sentinel: the watermark arms at the first
+    // nonzero count, forfeiting at most one tick of chars once per session —
+    // always in the under-reward direction, never a double-fire.
     if (yellow_marker_chars_ == 0) yellow_marker_chars_ = state.typed_chars_session;
     if (cfg_.coins_enabled && state.regime != Regime::Idle && typing_now &&
         cfg_.coin_yellow_interval_chars > 0 &&

@@ -81,6 +81,7 @@ private:
     const Sfx* sfx_; // may be null (sound disabled)
 
     HWND hwnd_ = nullptr;
+    HINSTANCE hinst_ = nullptr; // the plugin DLL (owns wnd_proc + the class)
     HFONT font_ = nullptr;
     Phase phase_ = Phase::Hidden;
     RewardClass kind_ = RewardClass::RegularityCoin;

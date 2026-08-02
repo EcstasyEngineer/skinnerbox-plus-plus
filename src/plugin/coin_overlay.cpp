@@ -35,9 +35,16 @@ CoinOverlay::CoinOverlay(const NppData& npp, const Config& cfg,
                          const Sfx* sfx)
     : npp_(npp), cfg_(cfg), affirmations_(std::move(affirmations)), sfx_(sfx) {
     rng_ = static_cast<unsigned>(GetTickCount64() | 1);
+    // Register against the DLL that owns wnd_proc, NOT the host exe: a class
+    // registered under notepad++.exe would outlive plugin unload with a
+    // procedure pointing into freed code. Paired with UnregisterClassW in
+    // shutdown().
+    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                           GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                       reinterpret_cast<LPCWSTR>(&wnd_proc), &hinst_);
     WNDCLASSW wc{};
     wc.lpfnWndProc = wnd_proc;
-    wc.hInstance = GetModuleHandleW(nullptr);
+    wc.hInstance = hinst_;
     wc.lpszClassName = kClass;
     wc.hbrBackground = nullptr; // we paint everything
     RegisterClassW(&wc); // idempotent: re-register fails harmlessly
@@ -47,7 +54,7 @@ CoinOverlay::CoinOverlay(const NppData& npp, const Config& cfg,
         WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW |
             WS_EX_NOACTIVATE | WS_EX_TOPMOST,
         kClass, L"", WS_POPUP, 0, 0, kWinW, kWinH, npp_._nppHandle, nullptr,
-        wc.hInstance, nullptr);
+        hinst_, nullptr);
     if (hwnd_) {
         SetWindowLongPtrW(hwnd_, GWLP_USERDATA,
                           reinterpret_cast<LONG_PTR>(this));
@@ -72,6 +79,12 @@ void CoinOverlay::shutdown() {
         DeleteObject(font_);
         font_ = nullptr;
     }
+    // No dangling class after the DLL unloads. Only one overlay exists at a
+    // time, so unregistering here is always safe.
+    if (hinst_) {
+        UnregisterClassW(kClass, hinst_);
+        hinst_ = nullptr;
+    }
 }
 
 void CoinOverlay::spawn(RewardClass kind, double net_cpm) {
@@ -87,7 +100,10 @@ void CoinOverlay::spawn(RewardClass kind, double net_cpm) {
     const auto caret = static_cast<long long>(
         SendMessage(sci, SCI_GETCURRENTPOS, 0, 0));
     // Lead: coin_lead_seconds of typing at the current rate, floored so the
-    // coin is never on top of the caret even from a cold start.
+    // coin is never on top of the caret even from a cold start. Positions
+    // are Scintilla BYTE offsets while the lead is a char estimate — for
+    // multibyte UTF-8 input the coin collects a little early (never late),
+    // consistent with the gate's documented Latin/ASCII orientation.
     const double cps = std::max(1.0, net_cpm / 60.0);
     const long long lead_chars = std::max<long long>(
         10, static_cast<long long>(cps * cfg_.coin_lead_seconds));
