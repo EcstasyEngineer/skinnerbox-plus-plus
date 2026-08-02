@@ -21,7 +21,8 @@ struct RewardIntent {
     RewardClass kind;
     double confidence;      // 0-1, how sure the estimator is the state is real
     double dose;            // 0-1 abstract magnitude; NEVER a hardware amplitude
-    uint32_t max_duration_ms; // upper bound for any time-based delivery
+    uint32_t max_duration_ms; // abstract time ceiling for logs/contracts;
+                              // adapters map dose + their own channel timing
     std::string reason;     // machine-readable trigger tag, e.g. "flow_vi_reward"
 };
 
@@ -62,6 +63,12 @@ struct AmbientState {
     // "repeats", "flat", "filler", "mash", "drone", "echo"); empty while the
     // gate passes. Always points at static storage — safe to copy around.
     const char* gate_fail = "";
+    // GPT-2 lab scalars (advanced_debug only). Never used by the policy.
+    // ready=false until the lab host has returned at least one score.
+    bool gpt2_ready = false;
+    double gpt2_mean_bits = 0.0;  // mean surprisal, bits/token
+    double gpt2_band_dist = 0.0;  // |mean - fiction_median| / MAD
+    double gpt2_score_ms = 0.0;   // last forward-pass wall time
 };
 
 inline const char* regime_name(Regime r) {

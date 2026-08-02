@@ -26,13 +26,20 @@ struct ContentFacets {
 // Rolling window over recently *typed* text (append-only stream of inserted
 // characters; deletions don't rewrite history — the gate asks "what has the
 // writer been producing", not "what does the document say"). Editor- and
-// OS-independent.
+// OS-independent. Facets are Latin/ASCII-oriented (byte stream, not UTF-8
+// codepoints); English typing is the supported v0 case.
 class ContentWindow {
 public:
     explicit ContentWindow(size_t max_chars = 600) : max_chars_(max_chars) {}
 
     void add_text(const char* utf8, size_t len);
     ContentFacets facets() const;
+
+    // Snapshot of the typed-stream window (for lab scorers). Not the document.
+    std::string text() const {
+        return std::string(buf_.begin(), buf_.end());
+    }
+    size_t size() const { return buf_.size(); }
 
 private:
     size_t max_chars_;

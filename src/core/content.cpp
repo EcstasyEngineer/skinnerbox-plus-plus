@@ -24,6 +24,10 @@ inline int bigram_idx(char c) {
 } // namespace
 
 void ContentWindow::add_text(const char* utf8, size_t len) {
+    // Latin/ASCII-oriented gate: the window is a byte stream. Multi-byte UTF-8
+    // is stored as raw bytes (histograms/tokenization are not codepoint-aware).
+    // Product stance for v0: English typing sessions. Non-ASCII writing will
+    // make facets noisier; decode codepoints before facets if that changes.
     if (!utf8) return;
     for (size_t i = 0; i < len; ++i) buf_.push_back(utf8[i]);
     while (buf_.size() > max_chars_) buf_.pop_front();

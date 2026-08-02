@@ -21,6 +21,7 @@ cl /nologo /W4 /EHsc /std:c++17 /O2 /utf-8 /DUNICODE /D_UNICODE /DNOMINMAX ^
    src\core\estimator.cpp src\core\policy.cpp src\core\content.cpp ^
    src\adapters\log_adapter.cpp src\adapters\raw_log.cpp ^
    src\adapters\intiface_adapter.cpp ^
+   src\lab\gpt2_client.cpp ^
    src\plugin\npp_visual_adapter.cpp src\plugin\plugin_main.cpp ^
    user32.lib shell32.lib winhttp.lib
 if errorlevel 1 exit /b 1
@@ -42,3 +43,12 @@ cl /nologo /W4 /EHsc /std:c++17 /O2 /utf-8 /DNOMINMAX ^
    winhttp.lib
 if errorlevel 1 exit /b 1
 echo Built build\demo.exe
+
+rem Headless core unit tests (no WinHTTP / Notepad++).
+cl /nologo /W4 /EHsc /std:c++17 /O2 /utf-8 /DNOMINMAX ^
+   /Fobuild\ /Febuild\unit.exe ^
+   test\unit.cpp src\core\estimator.cpp src\core\policy.cpp src\core\content.cpp
+if errorlevel 1 exit /b 1
+echo Built build\unit.exe
+build\unit.exe
+if errorlevel 1 exit /b 1

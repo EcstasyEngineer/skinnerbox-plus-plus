@@ -13,8 +13,9 @@ namespace sbpp {
 // Fine-grained per-event/per-tick stream for offline analysis and estimator
 // debugging: every user edit event and every 1 Hz engine tick, monotonic
 // timestamps. With capture_text enabled it ALSO records the inserted/deleted
-// text itself — that is document content, so both switches ship default-off
-// and are separate INI opt-ins.
+// text itself — that is document content. One INI switch arms the whole
+// channel (debug_telemetry); capture_text is chosen by the host when the
+// log is opened (plugin always enables it when debug is on).
 class RawLog {
 public:
     RawLog(const std::wstring& path, bool capture_text);

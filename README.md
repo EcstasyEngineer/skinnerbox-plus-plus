@@ -36,11 +36,13 @@ The whole machine is a three-state FSM:
   *typed* (deletions don't rewrite history): character entropy ≥ 3.4 bits,
   repeated-token mass ≤ 0.55, "uuuh"-class filler ≤ 6%, plus tail checks that
   catch "duper duper duper" the moment it happens. No content evidence = gate
-  fails closed. Momentum alone can never reach FLOW.
+  fails closed. Momentum alone can never reach FLOW. The gate is
+  **Latin/ASCII-oriented** (byte stream, English bigrams); non-ASCII sessions
+  will get noisier facet scores.
 - **Reward policy.** Variable-interval, state-gated: hold FLOW ≥ 30 s and
   eligibility matures on an exponential hazard (mean 2 min); the reward fires
   while you're actively typing — the buzz lands during the behavior it
-  reinforces, never in the pause after it — with a hard 60 s cooldown.
+  reinforces, never in the pause after it — with a hard 40 s cooldown.
   VI + a state gate reinforces *staying in the state*, not performing for the
   dispenser.
 - **Outputs.** The caret line warms toward gold as flow rises (tonic); a
@@ -90,12 +92,43 @@ build.bat
 Emits the plugin DLL, `replay.exe` (offline log replay harness), and
 `demo.exe`.
 
+## Lab modes (optional)
+
+Two **mutually exclusive** plugin menu arms (never feed rewards):
+
+| menu | arm | purpose |
+|---|---|---|
+| Debug telemetry REC | raw log + typed text | offline audit corpus |
+| Advanced debug LAB | GPT-2 surprisal on the live window | live bits/token + band distance in the status bar and session snapshots |
+
+LAB uses a **Python host** (torch GPT-2) — the plugin is still C++; inference
+is a long-lived helper. One-time machine setup from the repo root:
+
+```
+powershell -ExecutionPolicy Bypass -File tools\setup_lab.ps1 -InstallDll
+```
+
+That copies the host scripts into
+`%APPDATA%\Notepad++\plugins\config\SkinnerBoxPP-lab\`, pins
+`[lab] python=` / `[lab] host=` in the INI to the experiments venv, and
+optionally installs the DLL. **Model weights are not shipped** — first time
+you arm LAB, the plugin prompts to download GPT-2 124M (~500 MB) into the
+local Hugging Face cache.
+
 ## Experiments
 
-`experiments/` holds the offline lab (Python, local-only data): can GPT-2
-surprisal or POS-tag statistics measure writing *quality* well enough to
-gate rewards on it? See `docs/experiment-02-quality-signals.md` for results.
-Python is tooling only — nothing in the runtime loop depends on it.
+`experiments/` is the offline lab. Quality ground truth is **external and
+post-session** — never writer self-labels mid-flow (see
+`docs/architecture.md`).
+
+```
+# after a session with REC on:
+python experiments/audit_session.py prepare %APPDATA%\Notepad++\plugins\config\SkinnerBoxPP-logs\session-….raw.jsonl
+# fill data/audit/<stem>/labels.jsonl externally
+python experiments/audit_session.py correlate data/audit/<stem>/packet.json
+```
+
+See `docs/experiment-02-quality-signals.md` for junk-gate / model-sweep results.
 
 ## License
 

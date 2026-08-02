@@ -66,13 +66,14 @@ void NppVisualAdapter::set_statusbar(const AmbientState& s) {
     } else {
         swprintf(hw, 48, L"hw DISCONNECTED");
     }
-    wchar_t text[224];
+    const char* mode =
+        cfg_.advanced_debug ? "LAB  " : (cfg_.debug_telemetry ? "REC  " : "");
+    wchar_t text[256];
     if (GetTickCount64() < message_until_ms_ && !message_.empty()) {
         // A reward happened: say what and why, in words, where the eye can
         // find it later — never a flash that interrupts reading.
-        swprintf(text, 224, L"%hs%.2f %hs · %s · %s",
-                 cfg_.debug_telemetry ? "REC  " : "", s.flow,
-                 regime_name(s.regime), message_.c_str(), hw);
+        swprintf(text, 256, L"%hs%.2f %hs · %s · %s",
+                 mode, s.flow, regime_name(s.regime), message_.c_str(), hw);
     } else {
         // Name the failing gate facet ("echo", "repeats", ...) so the writer
         // knows WHAT to change, not just that something is wrong.
@@ -80,10 +81,21 @@ void NppVisualAdapter::set_statusbar(const AmbientState& s) {
         if (!s.gate_ok)
             snprintf(gate, sizeof(gate), " (%s)",
                      s.gate_fail && s.gate_fail[0] ? s.gate_fail : "gate x");
-        swprintf(text, 224, L"%hs%.2f %hs%hs · out %.2f · %s",
-                 cfg_.debug_telemetry ? "REC  " : "", s.flow,
-                 regime_name(s.regime), gate,
-                 hw_ ? hw_->current_output() : 0.0, hw);
+        if (cfg_.advanced_debug && s.gpt2_ready) {
+            swprintf(text, 256,
+                     L"%hs%.2f %hs%hs · gpt2 %.1fb d=%.1f · out %.2f · %s",
+                     mode, s.flow, regime_name(s.regime), gate,
+                     s.gpt2_mean_bits, s.gpt2_band_dist,
+                     hw_ ? hw_->current_output() : 0.0, hw);
+        } else if (cfg_.advanced_debug) {
+            swprintf(text, 256, L"%hs%.2f %hs%hs · gpt2 … · out %.2f · %s",
+                     mode, s.flow, regime_name(s.regime), gate,
+                     hw_ ? hw_->current_output() : 0.0, hw);
+        } else {
+            swprintf(text, 256, L"%hs%.2f %hs%hs · out %.2f · %s",
+                     mode, s.flow, regime_name(s.regime), gate,
+                     hw_ ? hw_->current_output() : 0.0, hw);
+        }
     }
     if (last_status_ == text) return;
     last_status_ = text;
@@ -111,7 +123,9 @@ void NppVisualAdapter::ambient(const AmbientState& s) {
 
 void NppVisualAdapter::deliver(const RewardIntent& intent) {
     const unsigned long long now = GetTickCount64();
-    bloom_until_ms_ = now + intent.max_duration_ms;
+    // Bloom duration is visual-channel config, not policy intent duration
+    // (intent.max_duration_ms is an abstract ceiling for logs/other adapters).
+    bloom_until_ms_ = now + cfg_.bloom_ms;
     message_until_ms_ = now + cfg_.message_ms;
     // Name the behavior that earned it, not the internal event name.
     switch (intent.kind) {

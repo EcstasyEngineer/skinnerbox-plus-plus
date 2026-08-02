@@ -101,7 +101,8 @@ AmbientState FlowEstimator::tick(double now_s, bool focused, bool gate_ok) {
     state_.idle_seconds = std::min(idle, 1e6);
     state_.focus_losses = static_cast<uint32_t>(focus_losses_.size());
     state_.gate_ok = gate_ok;
-    // repetition/entropy/stall_frac are filled by the engine.
+    // Content facets (repetition/entropy/…) live on FlowEngine::last_state_,
+    // not here — the estimator only owns momentum + FSM + gate_ok.
     return state_;
 }
 

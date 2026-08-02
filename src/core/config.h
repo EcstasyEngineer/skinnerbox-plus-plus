@@ -72,10 +72,16 @@ struct Config {
     bool intiface_flow_vibe = false;
     double intiface_flow_vibe_level = 0.5;
 
-    // --- debug telemetry (default-off, one switch): per-event raw log
-    // INCLUDING typed text, for offline experiments (this is where the
-    // salience/quality corpora come from). Status bar shows REC while on. ---
+    // --- lab telemetry (default-off; mutually exclusive arms) ---
+    // debug_telemetry: per-event raw log INCLUDING typed text (offline
+    //   audit corpus). Status bar shows REC.
+    // advanced_debug: GPT-2 surprisal lab numbers on the live stream
+    //   (mean bits/token + band distance) plus the usual metadata log.
+    //   Does not write the raw text event stream — that is REC's job.
+    //   Status bar shows LAB. Never feeds the reward policy.
+    // Turning one on turns the other off (see plugin menu handlers).
     bool debug_telemetry = false;
+    bool advanced_debug = false;
 };
 
 } // namespace sbpp

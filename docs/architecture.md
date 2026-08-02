@@ -107,7 +107,48 @@ enveloped (ease-in / sustain / ease-out), fixed peak under the cap, magnitude
 carried by sustain duration. Rationale and the external design review behind
 it are summarized in [output-contract.md](output-contract.md) §3.
 
-The open measurement problem is **quality**: the lexical gate catches junk,
-not badness. The experiments in `experiments/` (GPT-2 surprisal band, POS-tag
-statistics) are the candidate quality signals — results in
-[experiment-02-quality-signals.md](experiment-02-quality-signals.md).
+## Quality measurement (design law)
+
+The lexical gate catches **junk**, not **bad writing**. Quality is an open
+measurement problem and it is handled **offline**:
+
+1. **External audits only.** Ground truth for quality comes from post-session
+   external review (batch judges, a separate model pass, a human auditor —
+   anyone but the writer mid-flow). The writer never self-rates quality during
+   a session. Interrupting generative headspace for "is this good?" is
+   adversarial to the state the box is training. Preference shortcuts and
+   in-editor quality prompts are out, not deferred.
+
+2. **GPT-2 is a lab instrument, not a runtime gate.** Surprisal numbers never
+   enter the reward policy. Two **mutually exclusive** lab arms in the plugin:
+
+   | arm | menu | what it does |
+   |---|---|---|
+   | REC | Debug telemetry | raw per-event log **with typed text** |
+   | LAB | Advanced debug | live GPT-2 mean bits/token + fiction-band distance on the 600-char typed window (stride ~300 / ≥5 s), status bar + session snapshots |
+
+   LAB talks to a long-lived **Python** host (torch GPT-2; same math as
+   `gpt2_lab.py`) over stdin/stdout JSON so a future native CPU binary can
+   drop in without plugin changes. Machine setup:
+   `tools\setup_lab.ps1` copies host scripts to
+   `%APPDATA%\Notepad++\plugins\config\SkinnerBoxPP-lab\` and pins
+   `[lab] python=` / `[lab] host=` in the INI to the experiments venv.
+   **GPT-2 weights are not shipped.** Arming LAB runs a local-cache check; if
+   the model is missing the plugin prompts once to download ~500 MB from
+   Hugging Face into the machine cache. Decline leaves LAB off. After that,
+   loads are `local_files_only` — no silent network.
+
+3. **Raw text stays local and opt-in.** REC is the text-capture arm; LAB only
+   keeps text in memory for scoring. Session text never ships with the repo
+   (`experiments/data/` is gitignored). Offline audit:
+   `experiments/audit_session.py` +
+   [experiment-02-quality-signals.md](experiment-02-quality-signals.md).
+
+Early chat-export brainstorms are not kept in-tree. Durable decisions live
+here, in the output contract, and in the experiment writeups.
+
+## Open measurement (status)
+
+Quality correlation against external audits is the open problem. The
+candidate offline signals are GPT-2 surprisal band and POS-tag statistics;
+the char-bigram facet already closed the mash hole in the runtime gate.

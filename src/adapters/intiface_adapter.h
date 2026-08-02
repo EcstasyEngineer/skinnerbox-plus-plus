@@ -27,6 +27,11 @@ namespace sbpp {
 //   * The protocol's ping timeout is the dead-man's switch. If MaxPingTime is
 //     nonzero we ping at half that interval; if this plugin dies, pings stop
 //     and the server stops devices on its own.
+//
+// Threading: no detached workers. Connect/deliver run on joinable threads
+// tracked by this object; shutdown stops accepting work, joins everyone,
+// StopAllDevices, then closes sockets. An epoch counter aborts mid-envelope
+// work after shutdown/reconnect so late threads cannot re-command devices.
 class IntifaceAdapter : public IOutputAdapter {
 public:
     struct Settings {
@@ -43,8 +48,7 @@ public:
     const char* name() const override { return "intiface"; }
     // Tonic: only acts when flow_vibe mode is on — holds a steady level while
     // the FSM is in FLOW. Never blocks the tick thread: if a reward envelope
-    // currently owns the device (mutex held through its sleeps), the update is
-    // skipped and re-asserted on a later tick.
+    // currently owns the device, the update is skipped and re-asserted later.
     void ambient(const AmbientState& state) override;
     void deliver(const RewardIntent& intent) override;
     void shutdown() override;
@@ -52,9 +56,9 @@ public:
     // Drop and re-establish the connection (menu action; safe from any thread).
     void reconnect();
 
-    bool connected() const { return connected_; }
-    const std::string& last_error() const { return last_error_; }
-    size_t device_count() const { return devices_.size(); }
+    bool connected() const;
+    std::string last_error() const;
+    size_t device_count() const;
     // Fraction of max_intensity currently commanded to the device(s): nonzero
     // only during a buzz. Feeds the status-bar "out" readout.
     double current_output() const { return current_output_.load(); }
@@ -67,15 +71,26 @@ private:
         std::string name;
     };
 
-    bool connect();          // handshake + device enumeration
-    bool send(const std::string& json);
-    std::string recv(uint32_t timeout_ms);
-    void close();
+    // Network connect + device list. Caller must hold mu_. Ping thread must
+    // already be joined (not joinable) before this starts a new one.
+    bool connect_unlocked();
+    bool send_unlocked(const std::string& json);
+    std::string recv_unlocked();
+    void close_unlocked();
     void parse_device_list(const std::string& json);
     void ping_loop();
+    void join_ping();
+    bool ensure_connected(uint64_t epoch);
+    void run_envelope(double dose, uint64_t epoch);
+    bool sleep_alive(uint32_t ms, uint64_t epoch) const;
+    bool set_level_unlocked(double level, bool& io_ok);
+    bool alive(uint64_t epoch) const;
 
     Settings cfg_;
-    std::mutex mu_;
+    mutable std::mutex mu_;
+    std::atomic<bool> running_{true};
+    std::atomic<uint64_t> epoch_{0};
+    std::atomic<bool> envelope_busy_{false};
     std::atomic<double> current_output_{0.0};
     double tonic_level_ = 0.0; // last tonic level sent (guarded by mu_)
     void* session_ = nullptr;   // HINTERNET
@@ -84,7 +99,11 @@ private:
     bool connected_ = false;
     bool stop_ping_ = false;
     uint32_t max_ping_ms_ = 0;
+    std::thread connect_thread_;
     std::thread ping_thread_;
+    std::mutex workers_mu_;
+    std::vector<std::thread> workers_;
+    std::mutex envelope_mu_; // at most one reward envelope at a time
     std::vector<Device> devices_;
     std::string last_error_;
     int next_id_ = 1;

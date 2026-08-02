@@ -21,8 +21,10 @@ std::optional<RewardIntent> RewardPolicy::tick(double now_s, double dt_s,
     const bool held = now_s - flow_entered_s_ >= cfg_.min_flow_hold_s;
     if (held && !eligible_) {
         // Exponential hazard: P(mature in dt) = 1 - exp(-dt/mean).
+        // Guard mean so a zero/negative config cannot saturate the hazard.
+        const double mean = std::max(cfg_.mean_reward_interval_s, 1.0);
         std::uniform_real_distribution<double> u(0.0, 1.0);
-        const double p = 1.0 - std::exp(-dt_s / cfg_.mean_reward_interval_s);
+        const double p = 1.0 - std::exp(-dt_s / mean);
         if (u(rng_) < p) eligible_ = true;
     }
 
@@ -39,7 +41,11 @@ std::optional<RewardIntent> RewardPolicy::tick(double now_s, double dt_s,
         intent.kind = RewardClass::MicroReward;
         intent.confidence = state.flow;
         intent.dose = std::clamp(0.3 + 0.5 * state.flow, 0.0, 1.0);
-        intent.max_duration_ms = cfg_.bloom_ms;
+        // Abstract time ceiling for logging/contracts — NOT a visual or
+        // hardware duration. Adapters map dose + their own channel config
+        // (bloom_ms, buzz_ms) independently.
+        intent.max_duration_ms =
+            static_cast<uint32_t>(std::lround(1500.0 + 3500.0 * intent.dose));
         intent.reason = "flow_vi_reward";
         return intent;
     }

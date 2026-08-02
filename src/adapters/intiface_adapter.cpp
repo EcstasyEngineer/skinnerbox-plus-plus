@@ -33,16 +33,41 @@ bool find_number(const std::string& s, const char* key, double& out,
 
 IntifaceAdapter::IntifaceAdapter(const Settings& s) : cfg_(s) {
     // Connect eagerly on a worker so plugin startup never blocks on a socket.
-    std::thread([this] {
+    connect_thread_ = std::thread([this] {
         std::lock_guard<std::mutex> lk(mu_);
-        connect();
-    }).detach();
+        if (running_.load()) connect_unlocked();
+    });
 }
 
 IntifaceAdapter::~IntifaceAdapter() { shutdown(); }
 
-bool IntifaceAdapter::connect() {
+bool IntifaceAdapter::alive(uint64_t epoch) const {
+    return running_.load() && epoch_.load() == epoch;
+}
+
+bool IntifaceAdapter::sleep_alive(uint32_t ms, uint64_t epoch) const {
+    const auto end =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
+    while (std::chrono::steady_clock::now() < end) {
+        if (!alive(epoch)) return false;
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    return alive(epoch);
+}
+
+void IntifaceAdapter::join_ping() {
+    std::thread t;
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+        stop_ping_ = true;
+        t = std::move(ping_thread_);
+    }
+    if (t.joinable()) t.join();
+}
+
+bool IntifaceAdapter::connect_unlocked() {
     if (connected_) return true;
+    if (!running_.load()) return false;
 
     std::wstring wurl(cfg_.url.begin(), cfg_.url.end());
     URL_COMPONENTS uc{};
@@ -114,14 +139,14 @@ bool IntifaceAdapter::connect() {
              "[{\"RequestServerInfo\":{\"Id\":%d,\"ClientName\":\"SkinnerBox++\","
              "\"ProtocolVersionMajor\":4,\"ProtocolVersionMinor\":0}}]",
              next_id_++);
-    if (!send(hs)) {
-        close();
+    if (!send_unlocked(hs)) {
+        close_unlocked();
         return false;
     }
-    const std::string info = recv(kTimeoutMs);
+    const std::string info = recv_unlocked();
     if (info.find("ServerInfo") == std::string::npos) {
         last_error_ = "no ServerInfo (protocol mismatch?): " + info.substr(0, 160);
-        close();
+        close_unlocked();
         return false;
     }
     double ping = 0;
@@ -130,12 +155,14 @@ bool IntifaceAdapter::connect() {
 
     char dl[96];
     snprintf(dl, sizeof(dl), "[{\"RequestDeviceList\":{\"Id\":%d}}]", next_id_++);
-    if (send(dl)) parse_device_list(recv(kTimeoutMs));
+    if (send_unlocked(dl)) parse_device_list(recv_unlocked());
 
     connected_ = true;
     // Dead-man's switch: keep pinging so the server holds the connection, and
     // so that if this process dies the server stops devices by itself.
-    if (max_ping_ms_ > 0) {
+    // Caller must have joined any previous ping thread (join_ping) first —
+    // assigning to a joinable std::thread is terminate.
+    if (max_ping_ms_ > 0 && running_.load()) {
         stop_ping_ = false;
         ping_thread_ = std::thread([this] { ping_loop(); });
     }
@@ -147,14 +174,14 @@ void IntifaceAdapter::ping_loop() {
     while (true) {
         std::this_thread::sleep_for(std::chrono::milliseconds(interval));
         std::lock_guard<std::mutex> lk(mu_);
-        if (stop_ping_ || !connected_) return;
+        if (stop_ping_ || !connected_ || !running_.load()) return;
         char p[64];
         snprintf(p, sizeof(p), "[{\"Ping\":{\"Id\":%d}}]", next_id_++);
-        if (!send(p)) return;
+        if (!send_unlocked(p)) return;
     }
 }
 
-bool IntifaceAdapter::send(const std::string& json) {
+bool IntifaceAdapter::send_unlocked(const std::string& json) {
     if (!websocket_) return false;
     const DWORD rc = WinHttpWebSocketSend(
         websocket_, WINHTTP_WEB_SOCKET_UTF8_MESSAGE_BUFFER_TYPE,
@@ -164,7 +191,8 @@ bool IntifaceAdapter::send(const std::string& json) {
     return rc == NO_ERROR;
 }
 
-std::string IntifaceAdapter::recv(uint32_t) {
+// Session-level WinHttpSetTimeouts owns the wait; no per-call override.
+std::string IntifaceAdapter::recv_unlocked() {
     if (!websocket_) return "";
     std::string out;
     char buf[4096];
@@ -210,16 +238,23 @@ void IntifaceAdapter::parse_device_list(const std::string& json) {
     }
 }
 
-void IntifaceAdapter::ambient(const AmbientState& state) {
-    if (!cfg_.flow_vibe) return;
-    const double level =
-        state.regime == Regime::Flow ? cfg_.flow_vibe_level : 0.0;
-    std::unique_lock<std::mutex> lk(mu_, std::try_to_lock);
-    if (!lk.owns_lock()) return; // reward envelope in progress; retry next tick
-    if (level == tonic_level_) return;
-    if (level == 0.0 && !connected_) { tonic_level_ = 0.0; return; }
-    if (!connect() || devices_.empty()) return;
-    bool io_ok = true;
+bool IntifaceAdapter::ensure_connected(uint64_t epoch) {
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+        if (!alive(epoch)) return false;
+        if (connected_) return true;
+    }
+    // Previous close may have left a joinable ping thread; join before
+    // connect_unlocked assigns a new one.
+    join_ping();
+    std::lock_guard<std::mutex> lk(mu_);
+    if (!alive(epoch)) return false;
+    if (connected_) return true;
+    return connect_unlocked();
+}
+
+bool IntifaceAdapter::set_level_unlocked(double level, bool& io_ok) {
+    if (!connected_ || devices_.empty()) return false;
     double out = 0.0;
     for (const Device& d : devices_) {
         const int cap_step =
@@ -233,82 +268,142 @@ void IntifaceAdapter::ambient(const AmbientState& state) {
                  "[{\"OutputCmd\":{\"Id\":%d,\"DeviceIndex\":%d,"
                  "\"FeatureIndex\":%d,\"Command\":{\"Vibrate\":{\"Value\":%d}}}}]",
                  next_id_++, d.index, d.feature, step);
-        io_ok = send(cmd) && io_ok;
+        io_ok = send_unlocked(cmd) && io_ok;
     }
+    current_output_ = io_ok ? out : 0.0;
+    return true;
+}
+
+void IntifaceAdapter::ambient(const AmbientState& state) {
+    if (!cfg_.flow_vibe) return;
+    if (envelope_busy_.load()) return; // reward owns the device; retry next tick
+    const double level =
+        state.regime == Regime::Flow ? cfg_.flow_vibe_level : 0.0;
+    std::unique_lock<std::mutex> lk(mu_, std::try_to_lock);
+    if (!lk.owns_lock()) return;
+    if (envelope_busy_.load()) return;
+    if (level == tonic_level_) return;
+    if (level == 0.0 && !connected_) { tonic_level_ = 0.0; return; }
+    if (!running_.load()) return;
+    // May need re-connect after a dead socket; can't join ping under mu_.
+    const bool need_connect = !connected_;
+    lk.unlock();
+    if (need_connect) {
+        if (!ensure_connected(epoch_.load())) return;
+    }
+    lk.lock();
+    if (envelope_busy_.load() || !running_.load()) return;
+    if (!connected_ && !connect_unlocked()) return;
+    if (devices_.empty()) return;
+    bool io_ok = true;
+    if (!set_level_unlocked(level, io_ok)) return;
     if (io_ok) {
         tonic_level_ = level;
-        current_output_ = level > 0.0 ? out : 0.0;
+        if (level == 0.0) current_output_ = 0.0;
     } else {
-        close(); // dead socket: reconnect on a later tick / next deliver
+        close_unlocked(); // dead socket: reconnect on a later tick / next deliver
         tonic_level_ = 0.0;
         current_output_ = 0.0;
     }
 }
 
-void IntifaceAdapter::deliver(const RewardIntent& intent) {
-    const double dose = intent.dose;
-    std::thread([this, dose] {
+void IntifaceAdapter::run_envelope(double dose, uint64_t epoch) {
+    // Serialize envelopes so concurrent deliver() threads cannot interleave
+    // OutputCmd streams. Ambient checks envelope_busy_ and skips.
+    std::lock_guard<std::mutex> elk(envelope_mu_);
+    if (!alive(epoch)) return;
+    if (!ensure_connected(epoch)) return;
+
+    const auto sustain_ms = static_cast<uint32_t>(std::min(
+        4000.0, cfg_.buzz_ms * (0.5 + std::min(dose, 1.0))));
+
+    envelope_busy_ = true;
+    // RAII-ish zero on every exit path so OutputCmd never sticks after abort.
+    auto zero_and_clear = [&] {
         std::lock_guard<std::mutex> lk(mu_);
-        if (!connect() || devices_.empty()) return;
-        // The reward is erogenous — the pleasure IS the reinforcer, so it is
-        // shaped like pleasure, not like a notification brick: quick ease-in,
-        // a sustain whose LENGTH carries the reward magnitude, gentle
-        // ease-out. Peak intensity is fixed at the cap: inside a tight cap,
-        // intensity differences aren't reliably discriminable, and
-        // habituation is fought with timing, never intensity. "Better flow →
-        // more pleasure time."
-        const auto sustain_ms = static_cast<uint32_t>(std::min(
-            4000.0, cfg_.buzz_ms * (0.5 + std::min(dose, 1.0))));
         bool io_ok = true;
-        // level: fraction of the intensity cap, quantized into the device's
-        // own step range. Buttplug has no server-side cap; this is the cap.
-        auto set_level = [&](double level) {
-            double out = 0.0;
-            for (const Device& d : devices_) {
-                const int cap_step =
-                    static_cast<int>(cfg_.max_intensity * d.max_value + 0.5);
-                int step = static_cast<int>(level * cap_step + 0.5);
-                step = std::min(step, cap_step);
-                if (level > 0.0) step = std::max(step, 1);
-                out = std::max(out, static_cast<double>(step) / d.max_value);
-                char cmd[224];
-                snprintf(cmd, sizeof(cmd),
-                         "[{\"OutputCmd\":{\"Id\":%d,\"DeviceIndex\":%d,"
-                         "\"FeatureIndex\":%d,\"Command\":{\"Vibrate\":{\"Value\":%d}}}}]",
-                         next_id_++, d.index, d.feature, step);
-                io_ok = send(cmd) && io_ok;
-            }
-            current_output_ = io_ok ? out : 0.0;
-        };
-        for (double f : {0.4, 0.7, 1.0}) { // ease-in, ~200 ms to peak
-            set_level(f);
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(sustain_ms));
-        for (double f : {0.66, 0.33}) {    // ease-out, ~300 ms
-            set_level(f);
-            std::this_thread::sleep_for(std::chrono::milliseconds(150));
-        }
-        // We own the stop: OutputCmd has no duration, so a value would persist
-        // forever if we didn't explicitly zero it. Ending at zero also resets
-        // the cached tonic level, so flow-vibe mode re-asserts its baseline on
-        // the next tick instead of trusting a stale cache.
-        set_level(0.0);
+        if (connected_) set_level_unlocked(0.0, io_ok);
         tonic_level_ = 0.0;
-        // A failed send means the socket is dead (server restart, BLE hiccup).
-        // Close now so the next deliver/reconnect re-establishes instead of
-        // silently shouting into a corpse.
-        if (!io_ok) close();
-    }).detach();
+        current_output_ = 0.0;
+        if (!io_ok) close_unlocked();
+        envelope_busy_ = false;
+    };
+
+    auto step = [&](double level) -> bool {
+        if (!alive(epoch)) return false;
+        std::lock_guard<std::mutex> lk(mu_);
+        if (!alive(epoch) || !connected_) return false;
+        bool io_ok = true;
+        if (!set_level_unlocked(level, io_ok)) return false;
+        if (!io_ok) {
+            close_unlocked();
+            return false;
+        }
+        return true;
+    };
+
+    // The reward is erogenous — the pleasure IS the reinforcer, so it is
+    // shaped like pleasure, not like a notification brick: quick ease-in,
+    // a sustain whose LENGTH carries the reward magnitude, gentle
+    // ease-out. Peak intensity is fixed at the cap: inside a tight cap,
+    // intensity differences aren't reliably discriminable, and
+    // habituation is fought with timing, never intensity. "Better flow →
+    // more pleasure time."
+    // Mutex is held only around socket send/state — never across sleeps —
+    // so the dead-man ping can run during a multi-second envelope.
+    for (double f : {0.4, 0.7, 1.0}) { // ease-in, ~200 ms to peak
+        if (!step(f)) {
+            zero_and_clear();
+            return;
+        }
+        if (!sleep_alive(100, epoch)) {
+            zero_and_clear();
+            return;
+        }
+    }
+    if (!sleep_alive(sustain_ms, epoch)) {
+        zero_and_clear();
+        return;
+    }
+    for (double f : {0.66, 0.33}) { // ease-out, ~300 ms
+        if (!step(f)) {
+            zero_and_clear();
+            return;
+        }
+        if (!sleep_alive(150, epoch)) {
+            zero_and_clear();
+            return;
+        }
+    }
+    // We own the stop: OutputCmd has no duration, so a value would persist
+    // forever if we didn't explicitly zero it. Ending at zero also resets
+    // the cached tonic level, so flow-vibe mode re-asserts its baseline on
+    // the next tick instead of trusting a stale cache.
+    zero_and_clear();
+}
+
+void IntifaceAdapter::deliver(const RewardIntent& intent) {
+    if (!running_.load()) return;
+    const double dose = intent.dose;
+    const uint64_t epoch = epoch_.load();
+    std::lock_guard<std::mutex> wlk(workers_mu_);
+    if (!running_.load()) return;
+    workers_.emplace_back([this, dose, epoch] { run_envelope(dose, epoch); });
 }
 
 void IntifaceAdapter::reconnect() {
-    std::lock_guard<std::mutex> lk(mu_);
-    close();
-    connect();
+    // Bump epoch so any in-flight envelope aborts and zeros before we tear
+    // down the socket for a fresh handshake.
+    epoch_.fetch_add(1);
+    join_ping();
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+        close_unlocked();
+        if (running_.load()) connect_unlocked();
+    }
 }
 
-void IntifaceAdapter::close() {
+void IntifaceAdapter::close_unlocked() {
     if (websocket_) {
         WinHttpWebSocketClose(websocket_, WINHTTP_WEB_SOCKET_SUCCESS_CLOSE_STATUS,
                               nullptr, 0);
@@ -327,21 +422,51 @@ void IntifaceAdapter::close() {
 }
 
 void IntifaceAdapter::shutdown() {
-    std::thread ping;
+    if (!running_.exchange(false)) return; // idempotent
+    epoch_.fetch_add(1);
     {
         std::lock_guard<std::mutex> lk(mu_);
         stop_ping_ = true;
-        ping = std::move(ping_thread_);
-        if (connected_) {
-            char cmd[96];
-            snprintf(cmd, sizeof(cmd), "[{\"StopAllDevices\":{\"Id\":%d}}]",
-                     next_id_++);
-            send(cmd); // fail toward off
-        }
     }
-    if (ping.joinable()) ping.join();
+
+    if (connect_thread_.joinable()) connect_thread_.join();
+
+    {
+        std::lock_guard<std::mutex> wlk(workers_mu_);
+        for (auto& t : workers_) {
+            if (t.joinable()) t.join();
+        }
+        workers_.clear();
+    }
+
+    join_ping();
+
     std::lock_guard<std::mutex> lk(mu_);
-    close();
+    if (connected_) {
+        char cmd[96];
+        snprintf(cmd, sizeof(cmd), "[{\"StopAllDevices\":{\"Id\":%d}}]",
+                 next_id_++);
+        send_unlocked(cmd); // fail toward off
+    }
+    close_unlocked();
+    current_output_ = 0.0;
+    tonic_level_ = 0.0;
+    envelope_busy_ = false;
+}
+
+bool IntifaceAdapter::connected() const {
+    std::lock_guard<std::mutex> lk(mu_);
+    return connected_;
+}
+
+std::string IntifaceAdapter::last_error() const {
+    std::lock_guard<std::mutex> lk(mu_);
+    return last_error_;
+}
+
+size_t IntifaceAdapter::device_count() const {
+    std::lock_guard<std::mutex> lk(mu_);
+    return devices_.size();
 }
 
 } // namespace sbpp

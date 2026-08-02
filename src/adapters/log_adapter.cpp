@@ -2,6 +2,7 @@
 // This file is part of SkinnerBox++, released under the GNU GPL v3 or later.
 
 #include "log_adapter.h"
+#include "raw_log.h"
 
 #include <share.h>
 #include <ctime>
@@ -66,29 +67,49 @@ void LogAdapter::ambient(const AmbientState& s) {
     }
     if (++ambient_downsample_ < kAmbientEveryNTicks) return;
     ambient_downsample_ = 0;
-    char buf[384];
-    snprintf(buf, sizeof(buf),
-             "{\"event\":\"snapshot\",\"ts\":\"%s\",\"flow\":%.3f,\"regime\":\"%s\","
-             "\"net_cpm\":%.1f,\"del_ratio\":%.3f,\"burst_s\":%.1f,"
-             "\"idle_s\":%.1f,\"focus_losses\":%u,"
-             "\"repetition\":%.3f,\"entropy\":%.2f,\"stall_frac\":%.3f,"
-             "\"bigram_bpc\":%.2f,\"gate_ok\":%s,\"gate_fail\":\"%s\"}",
-             timestamp().c_str(), s.flow, regime_name(s.regime), s.net_rate_cpm,
-             s.deletion_ratio, s.burst_seconds, s.idle_seconds, s.focus_losses,
-             s.repetition, s.entropy, s.stall_frac, s.bigram_bpc,
-             s.gate_ok ? "true" : "false", s.gate_fail ? s.gate_fail : "");
+    char buf[512];
+    if (s.gpt2_ready) {
+        snprintf(buf, sizeof(buf),
+                 "{\"event\":\"snapshot\",\"ts\":\"%s\",\"flow\":%.3f,\"regime\":\"%s\","
+                 "\"net_cpm\":%.1f,\"del_ratio\":%.3f,\"burst_s\":%.1f,"
+                 "\"idle_s\":%.1f,\"focus_losses\":%u,"
+                 "\"repetition\":%.3f,\"entropy\":%.2f,\"stall_frac\":%.3f,"
+                 "\"bigram_bpc\":%.2f,\"gate_ok\":%s,\"gate_fail\":\"%s\","
+                 "\"gpt2_mean\":%.3f,\"gpt2_band\":%.3f,\"gpt2_ms\":%.0f}",
+                 timestamp().c_str(), s.flow, regime_name(s.regime), s.net_rate_cpm,
+                 s.deletion_ratio, s.burst_seconds, s.idle_seconds, s.focus_losses,
+                 s.repetition, s.entropy, s.stall_frac, s.bigram_bpc,
+                 s.gate_ok ? "true" : "false", s.gate_fail ? s.gate_fail : "",
+                 s.gpt2_mean_bits, s.gpt2_band_dist, s.gpt2_score_ms);
+    } else {
+        snprintf(buf, sizeof(buf),
+                 "{\"event\":\"snapshot\",\"ts\":\"%s\",\"flow\":%.3f,\"regime\":\"%s\","
+                 "\"net_cpm\":%.1f,\"del_ratio\":%.3f,\"burst_s\":%.1f,"
+                 "\"idle_s\":%.1f,\"focus_losses\":%u,"
+                 "\"repetition\":%.3f,\"entropy\":%.2f,\"stall_frac\":%.3f,"
+                 "\"bigram_bpc\":%.2f,\"gate_ok\":%s,\"gate_fail\":\"%s\"}",
+                 timestamp().c_str(), s.flow, regime_name(s.regime), s.net_rate_cpm,
+                 s.deletion_ratio, s.burst_seconds, s.idle_seconds, s.focus_losses,
+                 s.repetition, s.entropy, s.stall_frac, s.bigram_bpc,
+                 s.gate_ok ? "true" : "false", s.gate_fail ? s.gate_fail : "");
+    }
     write_line(buf);
 }
 
 void LogAdapter::deliver(const RewardIntent& i) {
     if (!file_) return;
-    char buf[288];
-    snprintf(buf, sizeof(buf),
-             "{\"event\":\"reward\",\"ts\":\"%s\",\"kind\":\"%s\",\"reason\":\"%s\","
-             "\"confidence\":%.3f,\"dose\":%.3f,\"max_duration_ms\":%u}",
-             timestamp().c_str(), reward_class_name(i.kind), i.reason.c_str(),
+    std::string line = "{\"event\":\"reward\",\"ts\":\"";
+    line += timestamp();
+    line += "\",\"kind\":\"";
+    line += reward_class_name(i.kind);
+    line += "\",\"reason\":\"";
+    RawLog::append_escaped(line, i.reason.c_str(), i.reason.size());
+    char tail[96];
+    snprintf(tail, sizeof(tail),
+             "\",\"confidence\":%.3f,\"dose\":%.3f,\"max_duration_ms\":%u}",
              i.confidence, i.dose, i.max_duration_ms);
-    write_line(buf);
+    line += tail;
+    write_line(line);
 }
 
 void LogAdapter::shutdown() {

@@ -57,16 +57,30 @@ void RawLog::event(double t, const char* type, long long pos, long long len,
 
 void RawLog::tick(double t, const AmbientState& s) {
     if (!file_) return;
-    char buf[384];
-    snprintf(buf, sizeof(buf),
-             "{\"t\":%.2f,\"ev\":\"tick\",\"flow\":%.4f,\"regime\":\"%s\","
-             "\"cpm\":%.1f,\"del\":%.4f,\"burst\":%.1f,\"idle\":%.1f,\"focus\":%u,"
-             "\"rep\":%.3f,\"ent\":%.2f,\"stall\":%.3f,\"bpc\":%.2f,"
-             "\"gate\":%s,\"fail\":\"%s\"}",
-             t, s.flow, regime_name(s.regime), s.net_rate_cpm, s.deletion_ratio,
-             s.burst_seconds, s.idle_seconds, s.focus_losses,
-             s.repetition, s.entropy, s.stall_frac, s.bigram_bpc,
-             s.gate_ok ? "true" : "false", s.gate_fail ? s.gate_fail : "");
+    char buf[512];
+    if (s.gpt2_ready) {
+        snprintf(buf, sizeof(buf),
+                 "{\"t\":%.2f,\"ev\":\"tick\",\"flow\":%.4f,\"regime\":\"%s\","
+                 "\"cpm\":%.1f,\"del\":%.4f,\"burst\":%.1f,\"idle\":%.1f,\"focus\":%u,"
+                 "\"rep\":%.3f,\"ent\":%.2f,\"stall\":%.3f,\"bpc\":%.2f,"
+                 "\"gate\":%s,\"fail\":\"%s\","
+                 "\"gpt2_mean\":%.3f,\"gpt2_band\":%.3f,\"gpt2_ms\":%.0f}",
+                 t, s.flow, regime_name(s.regime), s.net_rate_cpm, s.deletion_ratio,
+                 s.burst_seconds, s.idle_seconds, s.focus_losses,
+                 s.repetition, s.entropy, s.stall_frac, s.bigram_bpc,
+                 s.gate_ok ? "true" : "false", s.gate_fail ? s.gate_fail : "",
+                 s.gpt2_mean_bits, s.gpt2_band_dist, s.gpt2_score_ms);
+    } else {
+        snprintf(buf, sizeof(buf),
+                 "{\"t\":%.2f,\"ev\":\"tick\",\"flow\":%.4f,\"regime\":\"%s\","
+                 "\"cpm\":%.1f,\"del\":%.4f,\"burst\":%.1f,\"idle\":%.1f,\"focus\":%u,"
+                 "\"rep\":%.3f,\"ent\":%.2f,\"stall\":%.3f,\"bpc\":%.2f,"
+                 "\"gate\":%s,\"fail\":\"%s\"}",
+                 t, s.flow, regime_name(s.regime), s.net_rate_cpm, s.deletion_ratio,
+                 s.burst_seconds, s.idle_seconds, s.focus_losses,
+                 s.repetition, s.entropy, s.stall_frac, s.bigram_bpc,
+                 s.gate_ok ? "true" : "false", s.gate_fail ? s.gate_fail : "");
+    }
     line(buf);
 }
 

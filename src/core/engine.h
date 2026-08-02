@@ -4,6 +4,7 @@
 #pragma once
 
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "adapter.h"
@@ -13,6 +14,16 @@
 #include "policy.h"
 
 namespace sbpp {
+
+// Optional lab scorer hook (advanced_debug). Plugin owns the client; engine
+// only asks for scores and publishes results into AmbientState. Policy never
+// reads these fields.
+struct IGpt2Lab {
+    virtual ~IGpt2Lab() = default;
+    virtual void on_typed_chars(uint32_t n) = 0;
+    virtual void maybe_request(double now_s, const std::string& window_text) = 0;
+    virtual void poll_into(AmbientState& state) = 0;
+};
 
 // The whole closed loop, editor-independent. The host (Notepad++ plugin,
 // console demo, anything else) forwards raw editor events and a ~1 Hz tick;
@@ -27,12 +38,16 @@ public:
         adapters_.push_back(std::move(adapter));
     }
 
+    // Non-owning. Lifetime must cover the engine (plugin holds both).
+    void set_gpt2_lab(IGpt2Lab* lab) { gpt2_lab_ = lab; }
+
     // text may be null (counts-only host); when present it feeds the lexical
     // content facets that gate FLOW and rewards.
     void on_insert(double now_s, uint32_t chars, const char* text = nullptr,
                    size_t text_len = 0) {
         estimator_.ingest_insert(now_s, chars);
         if (text) content_.add_text(text, text_len);
+        if (gpt2_lab_ && text_len) gpt2_lab_->on_typed_chars(static_cast<uint32_t>(text_len));
     }
     void on_delete(double now_s, uint32_t chars) { estimator_.ingest_delete(now_s, chars); }
     void on_focus_loss(double now_s) { estimator_.note_focus_loss(now_s); }
@@ -60,6 +75,16 @@ public:
         state.stall_frac = cf.stall_frac;
         state.bigram_bpc = cf.bigram_bpc;
         state.gate_fail = gate_fail;
+        // Lab scores (if any) are published into state before adapters see it.
+        // They never touch gate_ok or the policy.
+        if (gpt2_lab_) {
+            gpt2_lab_->poll_into(state);
+            if (cfg_.advanced_debug)
+                gpt2_lab_->maybe_request(now_s, content_.text());
+        }
+        // Public snapshot is exactly what adapters just saw (content facets
+        // included). Hosts must not read estimator state directly.
+        last_state_ = state;
         for (auto& a : adapters_) a->ambient(state);
         if (auto intent = policy_.tick(now_s, dt, state)) {
             for (auto& a : adapters_) a->deliver(*intent);
@@ -69,9 +94,14 @@ public:
     void shutdown() {
         for (auto& a : adapters_) a->shutdown();
         adapters_.clear();
+        gpt2_lab_ = nullptr;
     }
 
-    const AmbientState& state() const { return estimator_.state(); }
+    // Last tick's full ambient state (momentum + content facets + gate tags).
+    const AmbientState& state() const { return last_state_; }
+
+    // Typed-stream window (for hosts that mirror lab scoring outside tick).
+    std::string typed_window() const { return content_.text(); }
 
 private:
     Config cfg_;
@@ -80,6 +110,8 @@ private:
     ContentWindow content_;
     std::vector<std::unique_ptr<IOutputAdapter>> adapters_;
     double last_tick_s_ = -1.0;
+    AmbientState last_state_{};
+    IGpt2Lab* gpt2_lab_ = nullptr;
 };
 
 } // namespace sbpp

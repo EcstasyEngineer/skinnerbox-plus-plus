@@ -16,7 +16,7 @@ The policy never chooses device parameters. It emits two kinds of message:
   "kind": "micro_reward",
   "confidence": 0.83,
   "dose": 0.55,
-  "max_duration_ms": 8000,
+  "max_duration_ms": 3500,
   "reason": "flow_vi_reward"
 }
 ```
@@ -24,6 +24,9 @@ The policy never chooses device parameters. It emits two kinds of message:
 - `dose` is an abstract 0–1 magnitude. It is **never** a hardware amplitude,
   volume, or current. Adapters map dose ranges onto their own pre-approved
   behaviors under their own caps.
+- `max_duration_ms` is an abstract time ceiling for logs/contracts — not the
+  visual bloom length or the hardware buzz sustain. Those come from each
+  adapter's channel config (`bloom_ms`, `buzz_ms`).
 - `kind` values are append-only stable identifiers.
 
 **Tonic — `AmbientState`** (continuous, ~1 Hz):
