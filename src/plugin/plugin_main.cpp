@@ -33,6 +33,11 @@ constexpr int kNbFunc = 9;
 
 NppData g_npp;
 FuncItem g_funcs[kNbFunc];
+// Adapters hold const references into g_cfg while the engine's own copy
+// feeds the estimator/policy. INVARIANT: g_cfg is only mutated while the
+// engine is stopped (every menu handler stops -> mutates -> restarts) —
+// a live mutation would change adapter behavior under a running policy
+// that kept the old values.
 sbpp::Config g_cfg;
 std::unique_ptr<sbpp::FlowEngine> g_engine;
 std::unique_ptr<sbpp::RawLog> g_rawlog;
@@ -253,6 +258,7 @@ void CALLBACK timer_proc(HWND, UINT, UINT_PTR, DWORD) {
         fg && GetAncestor(fg, GA_ROOT) == GetAncestor(g_npp._nppHandle, GA_ROOT);
     if (g_focus_was_here && !here) g_engine->on_focus_loss(t);
     g_focus_was_here = here;
+    if (g_visual) g_visual->on_host_focus(here);
     g_engine->tick(t, here);
     if (g_rawlog) g_rawlog->tick(t, g_engine->state());
 }
@@ -283,7 +289,10 @@ void start_engine() {
         g_intiface = hw.get();
         g_engine->add_adapter(std::move(hw));
     }
-    if (g_cfg.visual_enabled || g_cfg.statusbar_enabled) {
+    // The visual adapter owns the coin overlay + SFX, so it must exist for
+    // any of the three in-editor channels — coins alone included.
+    if (g_cfg.visual_enabled || g_cfg.statusbar_enabled ||
+        g_cfg.coins_enabled) {
         auto vis = std::make_unique<sbpp::NppVisualAdapter>(
             g_npp, g_cfg, g_intiface, sounds_dir(), g_affirmations);
         g_visual = vis.get();
@@ -438,9 +447,14 @@ void cmd_about() {
 
 // ------------------------------------------------------------ plugin ABI ---
 
-BOOL APIENTRY DllMain(HMODULE hmod, DWORD reason, LPVOID) {
+BOOL APIENTRY DllMain(HMODULE hmod, DWORD reason, LPVOID reserved) {
     if (reason == DLL_PROCESS_ATTACH) g_hmod = hmod;
-    if (reason == DLL_PROCESS_DETACH) stop_engine();
+    // Detach cleanup is a last resort — NPPN_SHUTDOWN is the real teardown.
+    // Never at process termination (reserved != null): the loader has
+    // already killed other threads, and joining the Intiface workers or
+    // destroying windows under loader lock would deadlock a dying process
+    // for nothing.
+    if (reason == DLL_PROCESS_DETACH && reserved == nullptr) stop_engine();
     return TRUE;
 }
 
@@ -512,10 +526,11 @@ extern "C" __declspec(dllexport) void beNotified(SCNotification* n) {
                 static_cast<uint32_t>(n->length > 256 ? 256 : n->length);
             if (n->modificationType & SC_MOD_INSERTTEXT) {
                 g_engine->on_insert(t, chars, n->text, chars);
-                // A pending coin collects the instant typing reaches it —
-                // event-driven, so the pop isn't a tick late.
-                if (g_visual)
-                    g_visual->on_typed_to(n->position + n->length);
+                // A pending coin applies its crossing rule the instant the
+                // insert happens — event-driven, so the pop isn't a tick
+                // late. Unclamped length: the rule itself rejects
+                // paste-sized inserts.
+                if (g_visual) g_visual->on_typed(n->position, n->length);
                 if (g_rawlog)
                     g_rawlog->event(t, "ins", n->position, n->length, n->text,
                                     static_cast<size_t>(n->length));

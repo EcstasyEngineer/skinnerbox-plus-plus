@@ -62,7 +62,8 @@ std::optional<RewardIntent> RewardPolicy::tick(double now_s, double dt_s,
         cfg_.coin_yellow_interval_chars > 0 &&
         state.typed_chars_session >=
             yellow_marker_chars_ +
-                static_cast<uint64_t>(cfg_.coin_yellow_interval_chars)) {
+                static_cast<uint64_t>(
+                    std::max(1.0, cfg_.coin_yellow_interval_chars))) {
         yellow_marker_chars_ = state.typed_chars_session;
         RewardIntent intent;
         intent.kind = RewardClass::RegularityCoin;

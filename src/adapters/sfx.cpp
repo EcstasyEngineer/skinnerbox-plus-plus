@@ -124,6 +124,13 @@ std::vector<uint8_t> read_file(const std::wstring& path) {
 
 } // namespace
 
+Sfx::~Sfx() {
+    // Stop before the WAV vectors are freed — winmm keeps reading an
+    // SND_MEMORY buffer until playback ends, so tearing the engine down
+    // within ~1 s of a collect would otherwise be a use-after-free.
+    PlaySoundW(nullptr, nullptr, 0);
+}
+
 Sfx::Sfx(const std::wstring& sounds_dir) {
     if (!sounds_dir.empty()) {
         yellow_wav_ = read_file(sounds_dir + L"\\coin_yellow.wav");

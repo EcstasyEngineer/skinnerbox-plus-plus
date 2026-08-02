@@ -27,6 +27,9 @@ public:
 
     // sounds_dir may be empty (synth only). No I/O after construction.
     explicit Sfx(const std::wstring& sounds_dir);
+    // Cancels any in-flight playback: SND_MEMORY requires the buffer to
+    // outlive playback, and the buffers die with this object.
+    ~Sfx();
 
     void play(Cue cue) const;
 

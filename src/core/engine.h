@@ -34,7 +34,12 @@ public:
                    size_t text_len = 0) {
         estimator_.ingest_insert(now_s, chars);
         if (text) content_.add_text(text, text_len);
-        typed_chars_ += chars;
+        // Only keystroke-sized inserts count as PRODUCTION for the
+        // regularity tier — a paste is user-performed but it is not typing,
+        // and crediting it would let Ctrl+V farm yellow coins. 8 bytes
+        // covers real typing plus small IME commits (Latin/ASCII-oriented,
+        // like the gate).
+        if (chars <= 8) typed_chars_ += chars;
     }
     void on_delete(double now_s, uint32_t chars) { estimator_.ingest_delete(now_s, chars); }
     void on_focus_loss(double now_s) { estimator_.note_focus_loss(now_s); }

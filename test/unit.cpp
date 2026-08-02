@@ -24,16 +24,23 @@ void expect(bool cond, const char* msg) {
     }
 }
 
-// Captures every ambient + reward the engine fans out.
+// Captures every ambient + reward the engine fans out. The engine sends
+// ambient() before any deliver() on the same tick, so ambients.back() at
+// deliver time is the state the reward fired under.
 class CaptureAdapter : public sbpp::IOutputAdapter {
 public:
     const char* name() const override { return "capture"; }
     void ambient(const sbpp::AmbientState& s) override { ambients.push_back(s); }
-    void deliver(const sbpp::RewardIntent& i) override { rewards.push_back(i); }
+    void deliver(const sbpp::RewardIntent& i) override {
+        rewards.push_back(i);
+        reward_states.push_back(ambients.empty() ? sbpp::AmbientState{}
+                                                 : ambients.back());
+    }
     void shutdown() override {}
 
     std::vector<sbpp::AmbientState> ambients;
     std::vector<sbpp::RewardIntent> rewards;
+    std::vector<sbpp::AmbientState> reward_states; // state at delivery
 };
 
 const char* kProse =
@@ -166,28 +173,32 @@ void test_no_reward_while_gated() {
     }
     const size_t rewards_before = c->rewards.size();
 
-    // Inject mash to break gate mid-session
+    (void)rewards_before;
+    // Inject mash to break gate mid-session. The 600-char window blends, so
+    // the gate takes a few mash ticks to fail — FLOW (and legitimate
+    // rewards) may briefly persist. The hard invariant is per-delivery:
+    // every quality reward fires under FLOW with the gate green.
     const char* mash =
         "asdfasdfasdfasdfasdfasdfasdfasdfasdfasdfasdfasdfasdfasdfasdf";
+    bool saw_gate_fail = false;
     for (int i = 0; i < 20; ++i) {
         t += 1.0;
         engine.on_insert(t, static_cast<uint32_t>(std::strlen(mash)), mash,
                          std::strlen(mash));
         engine.tick(t, true);
         if (!c->ambients.back().gate_ok) {
+            saw_gate_fail = true;
             expect(c->ambients.back().regime != sbpp::Regime::Flow,
                    "gated: not FLOW");
         }
     }
-    // Any new rewards while gate is failing would be wrong — policy only
-    // fires in FLOW, which requires gate_ok.
-    for (size_t i = rewards_before; i < c->rewards.size(); ++i) {
-        // If a reward fired, the ambient just before must have been FLOW.
-        // Simpler invariant: when last ambient is gated, we accept no claim
-        // beyond "rewards only in FLOW" which FSM already enforces.
-        (void)i;
+    expect(saw_gate_fail, "gated: mash actually broke the gate");
+    for (size_t i = 0; i < c->rewards.size(); ++i) {
+        if (c->rewards[i].kind != sbpp::RewardClass::MicroReward) continue;
+        expect(c->reward_states[i].regime == sbpp::Regime::Flow &&
+                   c->reward_states[i].gate_ok,
+               "gated: every quality reward fired in FLOW with gate ok");
     }
-    expect(true, "gated: completed without crash");
 }
 
 void test_eligibility_forfeit_on_leave_flow() {

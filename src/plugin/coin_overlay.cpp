@@ -32,8 +32,10 @@ HWND current_scintilla(const NppData& npp) {
 
 CoinOverlay::CoinOverlay(const NppData& npp, const Config& cfg,
                          std::vector<std::wstring> affirmations,
-                         const Sfx* sfx)
-    : npp_(npp), cfg_(cfg), affirmations_(std::move(affirmations)), sfx_(sfx) {
+                         const Sfx* sfx,
+                         std::function<void(RewardClass)> on_collect)
+    : npp_(npp), cfg_(cfg), affirmations_(std::move(affirmations)), sfx_(sfx),
+      on_collect_(std::move(on_collect)) {
     rng_ = static_cast<unsigned>(GetTickCount64() | 1);
     // Register against the DLL that owns wnd_proc, NOT the host exe: a class
     // registered under notepad++.exe would outlive plugin unload with a
@@ -60,9 +62,11 @@ CoinOverlay::CoinOverlay(const NppData& npp, const Config& cfg,
                           reinterpret_cast<LONG_PTR>(this));
         SetLayeredWindowAttributes(hwnd_, kKey, kAlpha,
                                    LWA_ALPHA | LWA_COLORKEY);
+        // Antialiased, NOT ClearType: subpixel rendering against the magenta
+        // color key leaves colored fringing around glyph edges.
         font_ = CreateFontW(-18, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
                             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
-                            CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                            CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY,
                             VARIABLE_PITCH, L"Segoe UI");
     }
 }
@@ -145,8 +149,14 @@ void CoinOverlay::spawn(RewardClass kind, double net_cpm) {
     InvalidateRect(hwnd_, nullptr, TRUE);
 }
 
-void CoinOverlay::on_typed_to(long long caret_pos) {
-    if (phase_ == Phase::Pending && caret_pos >= target_pos_) collect();
+void CoinOverlay::on_typed(long long pos, long long len) {
+    if (phase_ != Phase::Pending) return;
+    // Crossing rule: only a keystroke-sized insert whose range carries the
+    // caret THROUGH the target pays. An insert entirely past the target
+    // (user clicked ahead and typed) never crosses; a paste is too big to
+    // be typing and is excluded regardless of where it lands.
+    if (len > 0 && len <= 8 && pos < target_pos_ && pos + len >= target_pos_)
+        collect();
 }
 
 void CoinOverlay::tick() {
@@ -162,6 +172,14 @@ void CoinOverlay::cancel_pending() {
     if (phase_ == Phase::Pending) hide();
 }
 
+void CoinOverlay::on_host_focus(bool focused) {
+    // The sprite is TOPMOST: the instant the editor stops being the
+    // foreground window it must disappear (never float over another app or
+    // a screen-share). Losing focus mid-coin forfeits it — leaving is
+    // leaving.
+    if (!focused && phase_ != Phase::Hidden) hide();
+}
+
 void CoinOverlay::collect() {
     phase_ = Phase::Popping;
     anim_start_ms_ = GetTickCount64();
@@ -174,6 +192,7 @@ void CoinOverlay::collect() {
     if (sfx_ && cfg_.coin_sound)
         sfx_->play(kind_ == RewardClass::MicroReward ? Sfx::Cue::CoinRed
                                                      : Sfx::Cue::CoinYellow);
+    if (on_collect_) on_collect_(kind_);
     if (hwnd_) SetTimer(hwnd_, kAnimTimer, 30, nullptr);
 }
 

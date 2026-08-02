@@ -44,17 +44,25 @@ public:
     void deliver(const RewardIntent& intent) override;
     void shutdown() override;
 
-    // Host forwards typed caret advancement (insert events) so a pending
-    // coin can collect the moment typing reaches it, not at the next tick.
-    void on_typed_to(long long caret_pos);
+    // Host forwards every user insert (document position + byte length) so
+    // a pending coin can apply its crossing rule the moment typing reaches
+    // it, not at the next tick.
+    void on_typed(long long pos, long long len);
 
     // Host forwards buffer/tab switches: a pending coin dies with its
     // document (its target position would false-collect in the new one).
     void on_buffer_switch();
 
+    // Host forwards foreground-focus state each tick: the topmost coin
+    // sprite must never be visible over another application.
+    void on_host_focus(bool focused);
+
 private:
     void apply_color(COLORREF color);
     void set_statusbar(const AmbientState& state);
+    // The payoff moment: phasic visuals for a collected (or, with coins
+    // disabled, immediately-delivered) quality reward.
+    void on_coin_collect(RewardClass kind);
 
     NppData npp_;
     const Config& cfg_;

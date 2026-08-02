@@ -45,9 +45,11 @@ NppVisualAdapter::NppVisualAdapter(const NppData& npp, const Config& cfg,
     : npp_(npp), cfg_(cfg), hw_(hw) {
     if (cfg_.coins_enabled) {
         if (cfg_.coin_sound) sfx_ = std::make_unique<Sfx>(sounds_dir);
-        coins_ = std::make_unique<CoinOverlay>(npp_, cfg_,
-                                               std::move(affirmations),
-                                               sfx_.get());
+        // Phasic visuals (bloom + explained message) fire at COLLECT, in
+        // sync with the pop and the ding — the payoff is one moment.
+        coins_ = std::make_unique<CoinOverlay>(
+            npp_, cfg_, std::move(affirmations), sfx_.get(),
+            [this](RewardClass kind) { on_coin_collect(kind); });
     }
     base_color_ = static_cast<COLORREF>(
         SendMessage(npp_._scintillaMainHandle, SCI_GETCARETLINEBACK, 0, 0));
@@ -121,32 +123,41 @@ void NppVisualAdapter::ambient(const AmbientState& s) {
 }
 
 void NppVisualAdapter::deliver(const RewardIntent& intent) {
+    // With coins on, delivery = a coin spawns ahead; ALL phasic visuals
+    // wait for the collect (see on_coin_collect). An uncollected coin must
+    // pay nothing on this channel — praising a reward the writer never
+    // reached would decouple the words from the behavior.
+    if (coins_) {
+        coins_->spawn(intent.kind, last_cpm_);
+        return;
+    }
+    // Coins disabled: the quality tier falls back to immediate bloom +
+    // message (the pre-coin behavior). The regularity tier has no
+    // coin-less mapping — small and frequent must stay small.
+    if (intent.kind == RewardClass::MicroReward) on_coin_collect(intent.kind);
+}
+
+void NppVisualAdapter::on_coin_collect(RewardClass kind) {
+    if (kind != RewardClass::MicroReward) return; // yellow: pop + ding only
     const unsigned long long now = GetTickCount64();
-    if (coins_) coins_->spawn(intent.kind, last_cpm_);
-    // The regularity tier is coin-only: no bloom, no status message — small
-    // and frequent must stay small. The quality tier keeps the full phasic
-    // treatment (bloom + explained message + its coin).
-    if (intent.kind == RewardClass::RegularityCoin) return;
     // Bloom duration is visual-channel config, not policy intent duration
     // (intent.max_duration_ms is an abstract ceiling for logs/other adapters).
     bloom_until_ms_ = now + cfg_.bloom_ms;
     message_until_ms_ = now + cfg_.message_ms;
     // Name the behavior that earned it, not the internal event name.
-    switch (intent.kind) {
-        case RewardClass::MicroReward:
-            message_ = L"held flow — good stretch";
-            break;
-        case RewardClass::RegularityCoin:
-            break; // unreachable; handled above
-    }
+    message_ = L"held flow — good stretch";
 }
 
-void NppVisualAdapter::on_typed_to(long long caret_pos) {
-    if (coins_) coins_->on_typed_to(caret_pos);
+void NppVisualAdapter::on_typed(long long pos, long long len) {
+    if (coins_) coins_->on_typed(pos, len);
 }
 
 void NppVisualAdapter::on_buffer_switch() {
     if (coins_) coins_->cancel_pending();
+}
+
+void NppVisualAdapter::on_host_focus(bool focused) {
+    if (coins_) coins_->on_host_focus(focused);
 }
 
 NppVisualAdapter::~NppVisualAdapter() = default;

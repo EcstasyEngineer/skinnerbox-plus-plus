@@ -77,14 +77,25 @@ Rules: non-blocking on the caller's thread; fail toward off/neutral.
 The Notepad++ visual adapter delivers phasic intents as **coins**: a
 click-through, semi-transparent overlay sprite spawned ahead of the caret
 (≈ `coin_lead_seconds` of typing at the current rate, wrapped to the next
-line when it would pass the word-wrap edge), collected when typing reaches
-its document position. Collect = pop animation + reinforcing SFX (synth
+line when it would pass the word-wrap edge), collected only by a
+keystroke-sized insert whose range crosses the coin's document offset —
+caret jumps, clicks, and pastes cannot collect. **Everything this channel
+pays, it pays at the collect**: pop animation, reinforcing SFX (synth
 two-note coin ding for yellow, warmer chime + a floating affirmation from
-the INI list for red). Uncollected coins expire silently
-(`coin_expire_seconds`). Caret jumps and mouse clicks cannot collect — only
-typed advancement. Sound sources: writer-supplied
+the INI list for red), caret-line bloom, and the status-bar message all
+fire in that one moment. An uncollected coin expires silently
+(`coin_expire_seconds`) and pays nothing on this channel. The sprite hides
+whenever the editor loses foreground focus (it is topmost; it must never
+float over another application). Sound sources: writer-supplied
 `SkinnerBoxPP-sounds\coin_yellow.wav` / `coin_red.wav`, else synthesized
 bells (`src/adapters/sfx.*`); never a system alert sound.
+
+Per-channel timing is deliberate: the coin channel pays at **collect**
+(guaranteed mid-typing — collection is typing), while the hardware channel
+below pays at **fire** (also guaranteed mid-typing — the policy only fires
+while keys are moving). Both honor contiguity; they differ only in which
+mid-typing moment carries the payoff, and an expired coin costs the writer
+the visual/audio payoff without retracting an already-delivered buzz.
 
 ## 4. Hardware binding: Intiface (optional)
 
