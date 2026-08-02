@@ -5,9 +5,11 @@ An operant conditioning chamber for your editor.
 SkinnerBox++ is a self-contained Notepad++ plugin that measures two things
 about your writing — **momentum** (are you typing?) and **content entropy**
 (are you typing *writing*, not junk?) — and reinforces the state where both
-hold. Qualifying stretches of flow earn vibration rewards through
-[Intiface Central](https://intiface.com/central/) on a variable-interval
-schedule. The box rewards the behavior it wants more of. You are the occupant.
+hold. Rewards are **coins that spawn ahead of your caret** and are collected
+by typing into them, platformer-style: yellow coins for keeping the words
+coming, red coins for holding real flow. Optional hardware rewards through
+[Intiface Central](https://intiface.com/central/) ride the same policy. The
+box rewards the behavior it wants more of. You are the occupant.
 
 Session logs are **metadata-only** — behavioral features and reward events,
 never your document text (unless you explicitly arm debug telemetry).
@@ -39,24 +41,36 @@ The whole machine is a three-state FSM:
   fails closed. Momentum alone can never reach FLOW. The gate is
   **Latin/ASCII-oriented** (byte stream, English bigrams); non-ASCII sessions
   will get noisier facet scores.
-- **Reward policy.** Variable-interval, state-gated: hold FLOW ≥ 30 s and
-  eligibility matures on an exponential hazard (mean 2 min); the reward fires
-  while you're actively typing — the buzz lands during the behavior it
-  reinforces, never in the pause after it — with a hard 40 s cooldown.
-  VI + a state gate reinforces *staying in the state*, not performing for the
-  dispenser.
-- **Outputs.** The caret line warms toward gold as flow rises (tonic); a
-  delivered reward plays an enveloped vibration on your Intiface device and
-  blooms the tint (phasic). Client-side intensity cap (30% of the device's
-  range by default) — Buttplug has no server-side cap, so the plugin owns the
-  stop and every envelope ends in an explicit zero.
+- **Reward policy.** Two tiers. *Red* (quality): variable-interval,
+  state-gated — hold FLOW ≥ 30 s, eligibility matures on an exponential
+  hazard (mean 2 min), fires while you're actively typing, hard 40 s
+  cooldown. VI + a state gate reinforces *staying in the state*, not
+  performing for the dispenser. *Yellow* (regularity): every ~250 net typed
+  chars while you're producing at all — volume is reinforced separately from
+  quality.
+- **Outputs.** The caret line warms toward gold as flow rises (tonic). A
+  reward spawns a **coin ahead of your caret** — about 7 seconds of typing
+  away at your current rate, just short of the word wrap — and typing into
+  it collects it: pop, a reinforcing ding (the two-note coin for yellow, a
+  warmer chime plus a floating affirmation for red), and the caret-line
+  bloom. Uncollected coins expire worthless; stopping never pays. With
+  Intiface enabled, red coins also play an enveloped vibration (client-side
+  intensity cap, 30% of the device's range by default — Buttplug has no
+  server-side cap, so the plugin owns the stop and every envelope ends in an
+  explicit zero).
 
-Two hardware modes, independently toggleable in the INI:
+Reward channels, independently toggleable in the INI:
 
-| mode | INI key | default | what it does |
+| channel | INI key | default | what it does |
 |---|---|---|---|
-| Random rewards | `[policy] vi_reward` | **on** | variable-interval enveloped rewards while FLOW holds — the conditioning schedule |
+| Coins | `[coins] enabled` | **on** | spawn-ahead coin overlay + collect SFX, both tiers |
+| Coin sound | `[coins] sound` | **on** | synth bells, or drop `coin_yellow.wav` / `coin_red.wav` into `…\plugins\config\SkinnerBoxPP-sounds\` (`.ogg` bell? convert once: `ffmpeg -i bell.ogg coin_red.wav`) |
+| Random rewards | `[policy] vi_reward` | **on** | the red tier's VI schedule |
+| Intiface | `[intiface] enabled` | on | enveloped vibration on red coins (needs Intiface Central running; harmless if not) |
 | Flow vibe | `[intiface] flow_vibe` | off | continuous tonic vibe (at `flow_vibe_level` × cap) whenever you're in FLOW |
+
+Affirmations for red-coin collects are configurable:
+`[coins] affirmations=good girl|good job|keep going|there you go`.
 
 Flow vibe is off by default on purpose: a constant baseline habituates and
 steals contrast from the phasic rewards. It's there because it's a legitimate
@@ -90,45 +104,33 @@ build.bat
 ```
 
 Emits the plugin DLL, `replay.exe` (offline log replay harness), and
-`demo.exe`.
+`demo.exe`, then builds and runs the core unit tests (`unit.exe`) — a build
+only succeeds if they pass.
 
-## Lab modes (optional)
+## Debug telemetry (optional)
 
-Two **mutually exclusive** plugin menu arms (never feed rewards):
-
-| menu | arm | purpose |
-|---|---|---|
-| Debug telemetry REC | raw log + typed text | offline audit corpus |
-| Advanced debug LAB | GPT-2 surprisal on the live window | live bits/token + band distance in the status bar and session snapshots |
-
-LAB uses a **Python host** (torch GPT-2) — the plugin is still C++; inference
-is a long-lived helper. One-time machine setup from the repo root:
-
-```
-powershell -ExecutionPolicy Bypass -File tools\setup_lab.ps1 -InstallDll
-```
-
-That copies the host scripts into
-`%APPDATA%\Notepad++\plugins\config\SkinnerBoxPP-lab\`, pins
-`[lab] python=` / `[lab] host=` in the INI to the experiments venv, and
-optionally installs the DLL. **Model weights are not shipped** — first time
-you arm LAB, the plugin prompts to download GPT-2 124M (~500 MB) into the
-local Hugging Face cache.
+One plugin menu arm, **Debug telemetry REC** (never feeds rewards): a raw
+per-event session log *including typed text* — the corpus for the offline
+audit below. Default off; the status bar shows REC while armed.
 
 ## Experiments
 
-`experiments/` is the offline lab. Quality ground truth is **external and
-post-session** — never writer self-labels mid-flow (see
-`docs/architecture.md`).
+`experiments/` is the offline lab — everything model-shaped happens here,
+post-session, never in the plugin (the live GPT-2 arm was removed after
+experiment 05 showed the runtime's own entropy facet tracks judged quality
+better). Quality ground truth is **external and post-session** — never
+writer self-labels mid-flow (see `docs/architecture.md`).
 
 ```
 # after a session with REC on:
 python experiments/audit_session.py prepare %APPDATA%\Notepad++\plugins\config\SkinnerBoxPP-logs\session-….raw.jsonl
-# fill data/audit/<stem>/labels.jsonl externally
+# label windows per experiments/judge_rubric.md (external judges) -> labels.jsonl
 python experiments/audit_session.py correlate data/audit/<stem>/packet.json
 ```
 
-See `docs/experiment-02-quality-signals.md` for junk-gate / model-sweep results.
+See `docs/experiment-02-quality-signals.md` for junk-gate / model-sweep
+results and `docs/experiment-05-live-session-audit.md` for the first
+end-to-end session retrospective.
 
 ## License
 

@@ -136,7 +136,11 @@ void test_no_flow_without_gate() {
             break;
         }
     }
-    expect(c->rewards.empty(), "no rewards when gate cannot pass");
+    // The QUALITY tier can never fire without the gate. The regularity tier
+    // is gate-free by design (volume, not quality) and may coin here.
+    for (const auto& r : c->rewards)
+        expect(r.kind != sbpp::RewardClass::MicroReward,
+               "no quality reward when gate cannot pass");
     expect(!engine.state().gate_ok, "state gate_ok false");
 }
 
@@ -218,14 +222,75 @@ void test_eligibility_forfeit_on_leave_flow() {
     // Resume typing: hold clock must restart (no instant reward from old
     // eligibility). With min_flow_hold_s=5, first few ticks after re-enter
     // must not reward solely from prior eligibility.
-    const size_t r0 = c->rewards.size();
+    size_t quality0 = 0;
+    for (const auto& r : c->rewards)
+        if (r.kind == sbpp::RewardClass::MicroReward) ++quality0;
     for (int i = 0; i < 3; ++i) {
         t += 1.0;
         feed_prose(engine, t, pos, 12);
         engine.tick(t, true);
     }
-    expect(c->rewards.size() == r0,
-           "forfeit: no reward in first 3s after re-enter (hold not met)");
+    size_t quality1 = 0;
+    for (const auto& r : c->rewards)
+        if (r.kind == sbpp::RewardClass::MicroReward) ++quality1;
+    expect(quality1 == quality0,
+           "forfeit: no quality reward in first 3s after re-enter");
+}
+
+void test_regularity_coins() {
+    printf("test_regularity_coins...\n");
+    sbpp::Config cfg;
+    cfg.gate_min_chars = 5000;          // gate can never pass
+    cfg.coin_yellow_interval_chars = 100;
+    cfg.min_flow_hold_s = 9999;         // quality tier out of the picture
+    sbpp::FlowEngine engine(cfg, 6);
+    auto cap = std::make_unique<CaptureAdapter>();
+    CaptureAdapter* c = cap.get();
+    engine.add_adapter(std::move(cap));
+
+    double t = 6000.0;
+    size_t pos = 0;
+    // 30 ticks x 12 chars = 360 chars typed while active -> coins at every
+    // 100-char watermark after the first tick arms the marker.
+    for (int i = 0; i < 30; ++i) {
+        t += 1.0;
+        feed_prose(engine, t, pos, 12);
+        engine.tick(t, true);
+    }
+    size_t coins = 0;
+    for (const auto& r : c->rewards) {
+        if (r.kind == sbpp::RewardClass::RegularityCoin) ++coins;
+        expect(r.kind != sbpp::RewardClass::MicroReward,
+               "coins: no quality reward possible here");
+    }
+    expect(coins >= 2 && coins <= 4, "coins: ~3 yellow coins over 360 chars");
+
+    // Idle: no coins mature while not producing.
+    const size_t before_idle = coins;
+    for (int i = 0; i < 60; ++i) {
+        t += 1.0;
+        engine.tick(t, true);
+    }
+    coins = 0;
+    for (const auto& r : c->rewards)
+        if (r.kind == sbpp::RewardClass::RegularityCoin) ++coins;
+    expect(coins == before_idle, "coins: none while idle");
+
+    // Disabled: no coins at all.
+    sbpp::Config off = cfg;
+    off.coins_enabled = false;
+    sbpp::FlowEngine e2(off, 7);
+    auto cap2 = std::make_unique<CaptureAdapter>();
+    CaptureAdapter* c2 = cap2.get();
+    e2.add_adapter(std::move(cap2));
+    t = 7000.0;
+    pos = 0;
+    for (int i = 0; i < 30; ++i) {
+        t += 1.0;
+        feed_prose(e2, t, pos, 12);
+        e2.tick(t, true);
+    }
+    expect(c2->rewards.empty(), "coins: disabled means silent");
 }
 
 void test_content_thin_closed() {
@@ -246,6 +311,7 @@ int main() {
     test_no_flow_without_gate();
     test_no_reward_while_gated();
     test_eligibility_forfeit_on_leave_flow();
+    test_regularity_coins();
     test_content_thin_closed();
 
     if (g_fails == 0) {

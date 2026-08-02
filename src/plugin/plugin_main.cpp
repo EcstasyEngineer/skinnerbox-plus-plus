@@ -15,6 +15,7 @@
 #include <ctime>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "../npp/PluginInterface.h"
 #include "../npp/Scintilla.h"
@@ -23,32 +24,33 @@
 #include "../adapters/log_adapter.h"
 #include "../adapters/intiface_adapter.h"
 #include "../adapters/raw_log.h"
-#include "../lab/gpt2_client.h"
-#include "../lab/gpt2_bridge.h"
 #include "npp_visual_adapter.h"
 
 namespace {
 
 const wchar_t kPluginName[] = L"SkinnerBox++";
-constexpr int kNbFunc = 10;
+constexpr int kNbFunc = 9;
 
 NppData g_npp;
 FuncItem g_funcs[kNbFunc];
 sbpp::Config g_cfg;
 std::unique_ptr<sbpp::FlowEngine> g_engine;
 std::unique_ptr<sbpp::RawLog> g_rawlog;
-sbpp::IntifaceAdapter* g_intiface = nullptr; // owned by the engine
-std::unique_ptr<sbpp::Gpt2LabClient> g_gpt2;
-std::unique_ptr<sbpp::Gpt2Bridge> g_gpt2_bridge;
+sbpp::IntifaceAdapter* g_intiface = nullptr;   // owned by the engine
+sbpp::NppVisualAdapter* g_visual = nullptr;    // owned by the engine
 UINT_PTR g_timer = 0;
 bool g_enabled = false;
 bool g_focus_was_here = true;
 std::wstring g_ini_path;
 std::wstring g_log_dir;
 std::wstring g_intiface_url;
-std::wstring g_lab_python; // empty → auto-detect
-std::wstring g_lab_host;   // empty → auto-detect gpt2_lab_host.py
+// Pipe-separated in the INI ([coins] affirmations=…); split at load.
+std::vector<std::wstring> g_affirmations;
+std::wstring g_affirmations_raw;
 HINSTANCE g_hmod = nullptr;
+
+const wchar_t kDefaultAffirmations[] =
+    L"good girl|good job|keep going|there you go";
 
 double now_s() { return static_cast<double>(GetTickCount64()) / 1000.0; }
 
@@ -141,19 +143,33 @@ void load_config() {
         g_intiface_url = buf;
     }
     g_cfg.debug_telemetry = read_ini_double(L"telemetry", L"debug", 0) != 0;
-    g_cfg.advanced_debug =
-        read_ini_double(L"telemetry", L"advanced_debug", 0) != 0;
-    // Mutually exclusive lab arms — advanced wins if both somehow set.
-    if (g_cfg.advanced_debug && g_cfg.debug_telemetry)
-        g_cfg.debug_telemetry = false;
+    g_cfg.coins_enabled = read_ini_double(L"coins", L"enabled",
+                                          g_cfg.coins_enabled ? 1 : 0) != 0;
+    g_cfg.coin_yellow_interval_chars = read_ini_double(
+        L"coins", L"yellow_interval_chars", d.coin_yellow_interval_chars);
+    g_cfg.coin_lead_seconds =
+        read_ini_double(L"coins", L"lead_seconds", d.coin_lead_seconds);
+    g_cfg.coin_expire_seconds =
+        read_ini_double(L"coins", L"expire_seconds", d.coin_expire_seconds);
+    g_cfg.coin_sound =
+        read_ini_double(L"coins", L"sound", d.coin_sound ? 1 : 0) != 0;
     {
-        wchar_t buf[MAX_PATH];
-        GetPrivateProfileStringW(L"lab", L"python", L"", buf, MAX_PATH,
+        wchar_t buf[512];
+        GetPrivateProfileStringW(L"coins", L"affirmations",
+                                 kDefaultAffirmations, buf, 512,
                                  g_ini_path.c_str());
-        g_lab_python = buf;
-        GetPrivateProfileStringW(L"lab", L"host", L"", buf, MAX_PATH,
-                                 g_ini_path.c_str());
-        g_lab_host = buf;
+        g_affirmations_raw = buf;
+        g_affirmations.clear();
+        std::wstring cur;
+        for (const wchar_t c : g_affirmations_raw) {
+            if (c == L'|') {
+                if (!cur.empty()) g_affirmations.push_back(cur);
+                cur.clear();
+            } else {
+                cur += c;
+            }
+        }
+        if (!cur.empty()) g_affirmations.push_back(cur);
     }
     compile_felt_dials(generosity, strength);
 }
@@ -193,229 +209,27 @@ void persist_config() {
     WritePrivateProfileStringW(L"intiface", L"url", g_intiface_url.c_str(),
                                g_ini_path.c_str());
     write_ini_double(L"telemetry", L"debug", g_cfg.debug_telemetry ? 1 : 0);
-    write_ini_double(L"telemetry", L"advanced_debug",
-                     g_cfg.advanced_debug ? 1 : 0);
-    WritePrivateProfileStringW(L"lab", L"python", g_lab_python.c_str(),
+    write_ini_double(L"coins", L"enabled", g_cfg.coins_enabled ? 1 : 0);
+    write_ini_double(L"coins", L"yellow_interval_chars",
+                     g_cfg.coin_yellow_interval_chars);
+    write_ini_double(L"coins", L"lead_seconds", g_cfg.coin_lead_seconds);
+    write_ini_double(L"coins", L"expire_seconds", g_cfg.coin_expire_seconds);
+    write_ini_double(L"coins", L"sound", g_cfg.coin_sound ? 1 : 0);
+    WritePrivateProfileStringW(L"coins", L"affirmations",
+                               g_affirmations_raw.empty()
+                                   ? kDefaultAffirmations
+                                   : g_affirmations_raw.c_str(),
                                g_ini_path.c_str());
-    WritePrivateProfileStringW(L"lab", L"host", g_lab_host.c_str(),
-                               g_ini_path.c_str());
 }
 
-// Resolve GPT-2 lab host paths.
-// Prefer: INI → %APPDATA%\...\SkinnerBoxPP-lab\ (tools\setup_lab.ps1) →
-// plugin-dir\lab\ → walk-up to experiments\ (dev checkout).
-std::wstring module_dir() {
-    wchar_t path[MAX_PATH] = L"";
-    GetModuleFileNameW(g_hmod, path, MAX_PATH);
-    std::wstring p(path);
-    const auto slash = p.find_last_of(L"\\/");
-    return slash == std::wstring::npos ? L"." : p.substr(0, slash);
-}
-
-bool file_exists_w(const std::wstring& p) {
-    const DWORD a = GetFileAttributesW(p.c_str());
-    return a != INVALID_FILE_ATTRIBUTES && !(a & FILE_ATTRIBUTE_DIRECTORY);
-}
-
-std::wstring config_lab_dir() {
-    // Same tree as the INI (NPPM_GETPLUGINSCONFIGDIR\SkinnerBoxPP-lab).
+// Sounds dir sits next to the INI: <plugins-config>\SkinnerBoxPP-sounds\.
+// Writers drop coin_yellow.wav / coin_red.wav there to replace the synth
+// bells; missing dir or files just means synth.
+std::wstring sounds_dir() {
     if (g_ini_path.empty()) return {};
     const auto slash = g_ini_path.find_last_of(L"\\/");
     if (slash == std::wstring::npos) return {};
-    return g_ini_path.substr(0, slash) + L"\\SkinnerBoxPP-lab";
-}
-
-std::wstring resolve_lab_host() {
-    if (!g_lab_host.empty() && file_exists_w(g_lab_host)) return g_lab_host;
-    const std::wstring cfg_host = config_lab_dir() + L"\\gpt2_lab_host.py";
-    if (file_exists_w(cfg_host)) return cfg_host;
-    const std::wstring dir = module_dir();
-    const std::wstring candidates[] = {
-        dir + L"\\lab\\gpt2_lab_host.py",
-        dir + L"\\..\\..\\experiments\\gpt2_lab_host.py",
-    };
-    std::wstring walk = dir;
-    for (int i = 0; i < 6; ++i) {
-        const std::wstring try_p = walk + L"\\experiments\\gpt2_lab_host.py";
-        if (file_exists_w(try_p)) return try_p;
-        const auto slash = walk.find_last_of(L"\\/");
-        if (slash == std::wstring::npos) break;
-        walk = walk.substr(0, slash);
-    }
-    for (const auto& c : candidates)
-        if (file_exists_w(c)) return c;
-    return {};
-}
-
-std::wstring resolve_lab_python(const std::wstring& host) {
-    if (!g_lab_python.empty() && file_exists_w(g_lab_python)) return g_lab_python;
-    // setup_lab.ps1 may leave a venv pointer next to the host scripts.
-    const std::wstring cfg_py = config_lab_dir() + L"\\python.exe";
-    if (file_exists_w(cfg_py)) return cfg_py;
-    if (!host.empty()) {
-        const auto slash = host.find_last_of(L"\\/");
-        if (slash != std::wstring::npos) {
-            const std::wstring base = host.substr(0, slash);
-            // SkinnerBoxPP-lab\ has no venv; experiments\ does.
-            const std::wstring vpy = base + L"\\.venv\\Scripts\\python.exe";
-            if (file_exists_w(vpy)) return vpy;
-            // Sibling: config\SkinnerBoxPP-lab → walk to repo is uncommon;
-            // prefer INI. Also try host's parent parent experiments layout.
-        }
-    }
-    const std::wstring dir = module_dir();
-    const std::wstring local = dir + L"\\lab\\python.exe";
-    if (file_exists_w(local)) return local;
-    return L"py";
-}
-
-void stop_gpt2_lab() {
-    if (g_engine) g_engine->set_gpt2_lab(nullptr);
-    g_gpt2_bridge.reset();
-    if (g_gpt2) {
-        g_gpt2->stop();
-        g_gpt2.reset();
-    }
-}
-
-// Parse {"present":true|false} from a host check/download reply.
-bool lab_json_present(const std::string& line, bool& present) {
-    const auto p = line.find("\"present\":");
-    if (p == std::string::npos) return false;
-    auto i = p + 10;
-    while (i < line.size() && line[i] == ' ') ++i;
-    if (line.compare(i, 4, "true") == 0) {
-        present = true;
-        return true;
-    }
-    if (line.compare(i, 5, "false") == 0) {
-        present = false;
-        return true;
-    }
-    return false;
-}
-
-// Resolve host/python, ensure GPT-2 is cached (prompt to download if not).
-// Returns false if the user declines or something fails — caller must leave
-// advanced_debug off. Weights are never shipped with the plugin.
-bool ensure_lab_model() {
-    const std::wstring host = resolve_lab_host();
-    if (host.empty()) {
-        MessageBoxW(g_npp._nppHandle,
-                    L"Advanced debug (GPT-2 lab) could not find gpt2_lab_host.py.\n\n"
-                    L"Set [lab] host= in the INI to the full path of\n"
-                    L"experiments\\gpt2_lab_host.py, and [lab] python= to the\n"
-                    L"venv python that has torch+transformers.",
-                    L"SkinnerBox++", MB_OK | MB_ICONWARNING);
-        return false;
-    }
-    const std::wstring py = resolve_lab_python(host);
-    std::string resp, err;
-    if (!sbpp::Gpt2LabClient::oneshot(py, host, "{\"op\":\"check\"}", resp, err,
-                                      60000)) {
-        wchar_t msg[512];
-        swprintf(msg, 512,
-                 L"Could not check for the GPT-2 lab model.\n\npython: %s\n"
-                 L"host: %s\n\n%hs",
-                 py.c_str(), host.c_str(),
-                 err.empty() ? "unknown error" : err.c_str());
-        MessageBoxW(g_npp._nppHandle, msg, L"SkinnerBox++",
-                    MB_OK | MB_ICONWARNING);
-        return false;
-    }
-    bool present = false;
-    if (!lab_json_present(resp, present)) {
-        wchar_t msg[384];
-        swprintf(msg, 384, L"Unexpected check response from lab host:\n\n%hs",
-                 resp.c_str());
-        MessageBoxW(g_npp._nppHandle, msg, L"SkinnerBox++",
-                    MB_OK | MB_ICONWARNING);
-        return false;
-    }
-    if (present) return true;
-
-    const int choice = MessageBoxW(
-        g_npp._nppHandle,
-        L"Advanced debug needs GPT-2 124M (~500 MB) for offline surprisal "
-        L"scoring.\n\n"
-        L"The model is NOT shipped with SkinnerBox++. Download it once from "
-        L"Hugging Face into your local cache?\n\n"
-        L"• One-time download, stays on this machine\n"
-        L"• Never uploaded; never used for rewards\n"
-        L"• Requires network + the lab Python venv (torch)\n\n"
-        L"Download now?",
-        L"SkinnerBox++ — download GPT-2 lab model?",
-        MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2);
-    if (choice != IDYES) return false;
-
-    MessageBoxW(g_npp._nppHandle,
-                L"Downloading GPT-2. This can take a few minutes.\n\n"
-                L"Notepad++ may look busy until the download finishes — "
-                L"that is expected.",
-                L"SkinnerBox++", MB_OK | MB_ICONINFORMATION);
-
-    // 0 = no timeout; first HF pull can be slow on a thin link.
-    if (!sbpp::Gpt2LabClient::oneshot(py, host, "{\"op\":\"download\"}", resp,
-                                      err, 0)) {
-        wchar_t msg[512];
-        swprintf(msg, 512, L"GPT-2 download failed.\n\n%hs",
-                 err.empty() ? "unknown error" : err.c_str());
-        MessageBoxW(g_npp._nppHandle, msg, L"SkinnerBox++",
-                    MB_OK | MB_ICONERROR);
-        return false;
-    }
-    present = false;
-    if (!lab_json_present(resp, present) || !present) {
-        std::string detail = resp;
-        const auto ep = resp.find("\"error\":\"");
-        if (ep != std::string::npos) {
-            detail = resp.substr(ep + 9);
-            const auto end = detail.find('"');
-            if (end != std::string::npos) detail = detail.substr(0, end);
-        }
-        wchar_t msg[512];
-        swprintf(msg, 512, L"GPT-2 download did not complete.\n\n%hs",
-                 detail.c_str());
-        MessageBoxW(g_npp._nppHandle, msg, L"SkinnerBox++",
-                    MB_OK | MB_ICONERROR);
-        return false;
-    }
-    MessageBoxW(g_npp._nppHandle,
-                L"GPT-2 is ready. Advanced debug will use the local cache only.",
-                L"SkinnerBox++", MB_OK | MB_ICONINFORMATION);
-    return true;
-}
-
-void start_gpt2_lab() {
-    stop_gpt2_lab();
-    if (!g_cfg.advanced_debug) return;
-    // Model must already be cached (ensure_lab_model ran when arming LAB).
-    // If INI had advanced_debug=1 from a previous session but the cache was
-    // wiped, re-prompt rather than silently hitting the network.
-    if (!ensure_lab_model()) {
-        g_cfg.advanced_debug = false;
-        persist_config();
-        return;
-    }
-    const std::wstring host = resolve_lab_host();
-    const std::wstring py = resolve_lab_python(host);
-    g_gpt2 = std::make_unique<sbpp::Gpt2LabClient>();
-    if (!g_gpt2->start(py, host)) {
-        std::string err = g_gpt2->last_error();
-        g_gpt2.reset();
-        wchar_t msg[512];
-        swprintf(msg, 512,
-                 L"Failed to start GPT-2 lab host.\n\npython: %s\nhost: %s\n\n%hs",
-                 py.c_str(), host.c_str(),
-                 err.empty() ? "CreateProcess failed" : err.c_str());
-        MessageBoxW(g_npp._nppHandle, msg, L"SkinnerBox++",
-                    MB_OK | MB_ICONWARNING);
-        g_cfg.advanced_debug = false;
-        persist_config();
-        return;
-    }
-    g_gpt2_bridge = std::make_unique<sbpp::Gpt2Bridge>(*g_gpt2);
-    if (g_engine) g_engine->set_gpt2_lab(g_gpt2_bridge.get());
+    return g_ini_path.substr(0, slash) + L"\\SkinnerBoxPP-sounds";
 }
 
 // --------------------------------------------------------------- session ---
@@ -454,8 +268,8 @@ void start_engine() {
                         g_cfg.min_flow_hold_s, g_cfg.intiface_max_intensity);
         g_engine->add_adapter(std::move(log));
     }
-    // REC arm: full raw text event stream. Exclusive with advanced_debug.
-    if (g_cfg.debug_telemetry && !g_cfg.advanced_debug)
+    // REC arm: full raw text event stream — the offline audit corpus.
+    if (g_cfg.debug_telemetry)
         g_rawlog = std::make_unique<sbpp::RawLog>(base + L".raw.jsonl",
                                                   /*capture_text=*/true);
     if (g_cfg.intiface_enabled) {
@@ -469,10 +283,12 @@ void start_engine() {
         g_intiface = hw.get();
         g_engine->add_adapter(std::move(hw));
     }
-    if (g_cfg.visual_enabled || g_cfg.statusbar_enabled)
-        g_engine->add_adapter(
-            std::make_unique<sbpp::NppVisualAdapter>(g_npp, g_cfg, g_intiface));
-    if (g_cfg.advanced_debug) start_gpt2_lab();
+    if (g_cfg.visual_enabled || g_cfg.statusbar_enabled) {
+        auto vis = std::make_unique<sbpp::NppVisualAdapter>(
+            g_npp, g_cfg, g_intiface, sounds_dir(), g_affirmations);
+        g_visual = vis.get();
+        g_engine->add_adapter(std::move(vis));
+    }
     g_timer = SetTimer(nullptr, 0, 1000, timer_proc);
     g_focus_was_here = true;
 }
@@ -482,8 +298,8 @@ void stop_engine() {
         KillTimer(nullptr, g_timer);
         g_timer = 0;
     }
-    stop_gpt2_lab();
     g_intiface = nullptr; // engine shutdown destroys it
+    g_visual = nullptr;
     if (g_engine) {
         g_engine->shutdown();
         g_engine.reset();
@@ -528,48 +344,16 @@ void cmd_open_logs() {
                   SW_SHOWNORMAL);
 }
 
-void sync_lab_menu_checks() {
+void cmd_toggle_debug() {
+    // REC arm: raw per-event log including typed text (offline audit corpus).
+    g_cfg.debug_telemetry = !g_cfg.debug_telemetry;
+    persist_config();
+    if (g_engine) {
+        stop_engine();
+        start_engine();
+    }
     SendMessage(g_npp._nppHandle, NPPM_SETMENUITEMCHECK, g_funcs[4]._cmdID,
                 g_cfg.debug_telemetry ? TRUE : FALSE);
-    SendMessage(g_npp._nppHandle, NPPM_SETMENUITEMCHECK, g_funcs[5]._cmdID,
-                g_cfg.advanced_debug ? TRUE : FALSE);
-}
-
-void cmd_toggle_debug() {
-    // REC arm. Mutually exclusive with advanced (LAB) debug.
-    g_cfg.debug_telemetry = !g_cfg.debug_telemetry;
-    if (g_cfg.debug_telemetry) g_cfg.advanced_debug = false;
-    persist_config();
-    if (g_engine) {
-        stop_engine();
-        start_engine();
-    }
-    sync_lab_menu_checks();
-}
-
-void cmd_toggle_advanced() {
-    // LAB arm: GPT-2 surprisal numbers. Exclusive with REC raw text log.
-    // Turning ON requires a local model cache — prompt to download if missing.
-    if (!g_cfg.advanced_debug) {
-        if (!ensure_lab_model()) {
-            g_cfg.advanced_debug = false;
-            persist_config();
-            sync_lab_menu_checks();
-            return;
-        }
-        g_cfg.advanced_debug = true;
-        g_cfg.debug_telemetry = false;
-    } else {
-        g_cfg.advanced_debug = false;
-    }
-    persist_config();
-    if (g_engine) {
-        stop_engine();
-        start_engine();
-    } else if (g_enabled && g_cfg.advanced_debug) {
-        // Engine was off; user only armed LAB — still fine, starts with enable.
-    }
-    sync_lab_menu_checks();
 }
 
 void cmd_toggle_flow_vibe() {
@@ -579,7 +363,7 @@ void cmd_toggle_flow_vibe() {
         stop_engine();
         start_engine();
     }
-    SendMessage(g_npp._nppHandle, NPPM_SETMENUITEMCHECK, g_funcs[6]._cmdID,
+    SendMessage(g_npp._nppHandle, NPPM_SETMENUITEMCHECK, g_funcs[5]._cmdID,
                 g_cfg.intiface_flow_vibe ? TRUE : FALSE);
 }
 
@@ -638,12 +422,14 @@ void cmd_about() {
     MessageBoxW(g_npp._nppHandle,
                 L"SkinnerBox++\n\n"
                 L"An operant conditioning chamber for your editor: measures "
-                L"typing momentum and content entropy, and reinforces FLOW "
-                L"with in-editor warmth and Intiface hardware rewards.\n\n"
+                L"typing momentum and content entropy, and reinforces the "
+                L"writing state with coins that spawn ahead of your caret — "
+                L"yellow for keeping the words coming, red for holding real "
+                L"flow — collected by typing into them. Optional Intiface "
+                L"hardware rewards ride the same policy.\n\n"
                 L"Session logs are metadata-only (no document text) unless "
-                L"Debug telemetry (REC) is armed.\n\n"
-                L"Advanced debug (LAB) streams GPT-2 surprisal numbers for "
-                L"offline quality work — never into the reward policy.\n\n"
+                L"Debug telemetry (REC) is armed. Quality analysis is fully "
+                L"offline (experiments/audit_session.py).\n\n"
                 L"github.com/EcstasyEngineer/skinnerbox-plus-plus",
                 L"About SkinnerBox++", MB_OK | MB_ICONINFORMATION);
 }
@@ -686,13 +472,11 @@ extern "C" __declspec(dllexport) FuncItem* getFuncsArray(int* count) {
     set(g_funcs[3], L"Open session logs", cmd_open_logs, false);
     set(g_funcs[4], L"Debug telemetry REC (records typed text)",
         cmd_toggle_debug, g_cfg.debug_telemetry);
-    set(g_funcs[5], L"Advanced debug LAB (GPT-2 numbers)", cmd_toggle_advanced,
-        g_cfg.advanced_debug);
-    set(g_funcs[6], L"Intiface: vibe while in FLOW", cmd_toggle_flow_vibe,
+    set(g_funcs[5], L"Intiface: vibe while in FLOW", cmd_toggle_flow_vibe,
         g_cfg.intiface_flow_vibe);
-    set(g_funcs[7], L"Intiface: test buzz", cmd_intiface_test, false);
-    set(g_funcs[8], L"Intiface: reconnect", cmd_intiface_reconnect, false);
-    set(g_funcs[9], L"About", cmd_about, false);
+    set(g_funcs[6], L"Intiface: test buzz", cmd_intiface_test, false);
+    set(g_funcs[7], L"Intiface: reconnect", cmd_intiface_reconnect, false);
+    set(g_funcs[8], L"About", cmd_about, false);
     *count = kNbFunc;
     return g_funcs;
 }
@@ -714,6 +498,9 @@ extern "C" __declspec(dllexport) void beNotified(SCNotification* n) {
                 g_rawlog->event(now_s(), "buf",
                                 static_cast<long long>(n->nmhdr.idFrom), 0,
                                 nullptr, 0);
+            // A pending coin's document position is meaningless in the new
+            // buffer and could false-collect — drop it.
+            if (g_visual) g_visual->on_buffer_switch();
             break;
         case SCN_MODIFIED: {
             if (!g_engine) break;
@@ -725,6 +512,10 @@ extern "C" __declspec(dllexport) void beNotified(SCNotification* n) {
                 static_cast<uint32_t>(n->length > 256 ? 256 : n->length);
             if (n->modificationType & SC_MOD_INSERTTEXT) {
                 g_engine->on_insert(t, chars, n->text, chars);
+                // A pending coin collects the instant typing reaches it —
+                // event-driven, so the pop isn't a tick late.
+                if (g_visual)
+                    g_visual->on_typed_to(n->position + n->length);
                 if (g_rawlog)
                     g_rawlog->event(t, "ins", n->position, n->length, n->text,
                                     static_cast<size_t>(n->length));

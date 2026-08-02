@@ -14,7 +14,11 @@ namespace sbpp {
 // Discrete (phasic) reward classes. Classes are stable identifiers: append,
 // never rename.
 enum class RewardClass {
-    MicroReward,       // qualifying moment during sustained flow
+    MicroReward,       // qualifying moment during sustained flow ("red coin":
+                       // the quality tier — VI schedule, gate required)
+    RegularityCoin,    // production-volume tier ("yellow coin"): every N net
+                       // typed chars while not idle. Reinforces showing up
+                       // and producing, independent of the quality tier.
 };
 
 struct RewardIntent {
@@ -63,12 +67,10 @@ struct AmbientState {
     // "repeats", "flat", "filler", "mash", "drone", "echo"); empty while the
     // gate passes. Always points at static storage — safe to copy around.
     const char* gate_fail = "";
-    // GPT-2 lab scalars (advanced_debug only). Never used by the policy.
-    // ready=false until the lab host has returned at least one score.
-    bool gpt2_ready = false;
-    double gpt2_mean_bits = 0.0;  // mean surprisal, bits/token
-    double gpt2_band_dist = 0.0;  // |mean - fiction_median| / MAD
-    double gpt2_score_ms = 0.0;   // last forward-pass wall time
+    // Net typed chars since the engine started (inserts only; deletions do
+    // not subtract — this counts production, not document growth). Feeds the
+    // regularity-coin accumulator in the policy.
+    uint64_t typed_chars_session = 0;
 };
 
 inline const char* regime_name(Regime r) {
@@ -83,6 +85,7 @@ inline const char* regime_name(Regime r) {
 inline const char* reward_class_name(RewardClass k) {
     switch (k) {
         case RewardClass::MicroReward:    return "micro_reward";
+        case RewardClass::RegularityCoin: return "regularity_coin";
     }
     return "unknown";
 }

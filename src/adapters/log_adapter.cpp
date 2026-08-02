@@ -68,31 +68,16 @@ void LogAdapter::ambient(const AmbientState& s) {
     if (++ambient_downsample_ < kAmbientEveryNTicks) return;
     ambient_downsample_ = 0;
     char buf[512];
-    if (s.gpt2_ready) {
-        snprintf(buf, sizeof(buf),
-                 "{\"event\":\"snapshot\",\"ts\":\"%s\",\"flow\":%.3f,\"regime\":\"%s\","
-                 "\"net_cpm\":%.1f,\"del_ratio\":%.3f,\"burst_s\":%.1f,"
-                 "\"idle_s\":%.1f,\"focus_losses\":%u,"
-                 "\"repetition\":%.3f,\"entropy\":%.2f,\"stall_frac\":%.3f,"
-                 "\"bigram_bpc\":%.2f,\"gate_ok\":%s,\"gate_fail\":\"%s\","
-                 "\"gpt2_mean\":%.3f,\"gpt2_band\":%.3f,\"gpt2_ms\":%.0f}",
-                 timestamp().c_str(), s.flow, regime_name(s.regime), s.net_rate_cpm,
-                 s.deletion_ratio, s.burst_seconds, s.idle_seconds, s.focus_losses,
-                 s.repetition, s.entropy, s.stall_frac, s.bigram_bpc,
-                 s.gate_ok ? "true" : "false", s.gate_fail ? s.gate_fail : "",
-                 s.gpt2_mean_bits, s.gpt2_band_dist, s.gpt2_score_ms);
-    } else {
-        snprintf(buf, sizeof(buf),
-                 "{\"event\":\"snapshot\",\"ts\":\"%s\",\"flow\":%.3f,\"regime\":\"%s\","
-                 "\"net_cpm\":%.1f,\"del_ratio\":%.3f,\"burst_s\":%.1f,"
-                 "\"idle_s\":%.1f,\"focus_losses\":%u,"
-                 "\"repetition\":%.3f,\"entropy\":%.2f,\"stall_frac\":%.3f,"
-                 "\"bigram_bpc\":%.2f,\"gate_ok\":%s,\"gate_fail\":\"%s\"}",
-                 timestamp().c_str(), s.flow, regime_name(s.regime), s.net_rate_cpm,
-                 s.deletion_ratio, s.burst_seconds, s.idle_seconds, s.focus_losses,
-                 s.repetition, s.entropy, s.stall_frac, s.bigram_bpc,
-                 s.gate_ok ? "true" : "false", s.gate_fail ? s.gate_fail : "");
-    }
+    snprintf(buf, sizeof(buf),
+             "{\"event\":\"snapshot\",\"ts\":\"%s\",\"flow\":%.3f,\"regime\":\"%s\","
+             "\"net_cpm\":%.1f,\"del_ratio\":%.3f,\"burst_s\":%.1f,"
+             "\"idle_s\":%.1f,\"focus_losses\":%u,"
+             "\"repetition\":%.3f,\"entropy\":%.2f,\"stall_frac\":%.3f,"
+             "\"bigram_bpc\":%.2f,\"gate_ok\":%s,\"gate_fail\":\"%s\"}",
+             timestamp().c_str(), s.flow, regime_name(s.regime), s.net_rate_cpm,
+             s.deletion_ratio, s.burst_seconds, s.idle_seconds, s.focus_losses,
+             s.repetition, s.entropy, s.stall_frac, s.bigram_bpc,
+             s.gate_ok ? "true" : "false", s.gate_fail ? s.gate_fail : "");
     write_line(buf);
 }
 

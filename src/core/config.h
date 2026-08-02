@@ -52,6 +52,24 @@ struct Config {
     double bloom_lift = 0.12;      // added tint above tonic, NOT a jump-to
     uint32_t message_ms = 25000;   // status-bar reward message dwell
 
+    // --- coin rewards (the primary phasic channel: visual + sound) ---
+    // A reward is delivered as a coin SPAWNED AHEAD of the caret — roughly
+    // coin_lead_seconds of typing away at the current rate — and COLLECTED
+    // when typing reaches it. Collection is the reinforcing moment (pop +
+    // ding); it lands mid-behavior by construction, because the only way to
+    // reach the coin is to keep writing. Two tiers:
+    //   yellow — RegularityCoin, every coin_yellow_interval_chars net typed
+    //            chars while not IDLE. Production volume, gate-free.
+    //   red    — MicroReward, the VI + FLOW-gate quality tier.
+    bool coins_enabled = true;
+    double coin_yellow_interval_chars = 250.0; // ~1/min at observed 250+ cpm
+    double coin_lead_seconds = 7.0;   // anticipation gap; writer-tunable —
+                                      // flagged "optimize on psychology"
+    double coin_expire_seconds = 45.0; // uncollected coin fades, no payout —
+                                       // collecting after a long stall would
+                                       // reinforce the stall/return cycle
+    bool coin_sound = true;           // collect SFX (synth bell; .wav override)
+
     // --- Intiface / Buttplug v4 output (the hardware reward channel) ---
     // Buttplug has NO server-side intensity cap and NO per-command duration:
     // a value persists until changed, so the client-side ceiling here is the
@@ -72,16 +90,12 @@ struct Config {
     bool intiface_flow_vibe = false;
     double intiface_flow_vibe_level = 0.5;
 
-    // --- lab telemetry (default-off; mutually exclusive arms) ---
-    // debug_telemetry: per-event raw log INCLUDING typed text (offline
-    //   audit corpus). Status bar shows REC.
-    // advanced_debug: GPT-2 surprisal lab numbers on the live stream
-    //   (mean bits/token + band distance) plus the usual metadata log.
-    //   Does not write the raw text event stream — that is REC's job.
-    //   Status bar shows LAB. Never feeds the reward policy.
-    // Turning one on turns the other off (see plugin menu handlers).
+    // --- debug telemetry (default-off) ---
+    // debug_telemetry: per-event raw log INCLUDING typed text — the offline
+    //   audit corpus (REC in the status bar). All quality measurement happens
+    //   offline on these logs (experiments/audit_session.py); nothing model-
+    //   shaped runs in-process. See docs/architecture.md "Quality measurement".
     bool debug_telemetry = false;
-    bool advanced_debug = false;
 };
 
 } // namespace sbpp

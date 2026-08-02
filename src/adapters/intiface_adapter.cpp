@@ -384,6 +384,12 @@ void IntifaceAdapter::run_envelope(double dose, uint64_t epoch) {
 
 void IntifaceAdapter::deliver(const RewardIntent& intent) {
     if (!running_.load()) return;
+    // Hardware carries only the quality tier. Regularity coins are frequent
+    // and cheap by design — mapping them to the erogenous channel would
+    // habituate it and flatten the contrast the VI reward depends on
+    // (output-contract §5: if the honest mapping is "nothing safe", map to
+    // nothing).
+    if (intent.kind != RewardClass::MicroReward) return;
     const double dose = intent.dose;
     const uint64_t epoch = epoch_.load();
     std::lock_guard<std::mutex> wlk(workers_mu_);

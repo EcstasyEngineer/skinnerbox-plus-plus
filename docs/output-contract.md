@@ -27,7 +27,13 @@ The policy never chooses device parameters. It emits two kinds of message:
 - `max_duration_ms` is an abstract time ceiling for logs/contracts — not the
   visual bloom length or the hardware buzz sustain. Those come from each
   adapter's channel config (`bloom_ms`, `buzz_ms`).
-- `kind` values are append-only stable identifiers.
+- `kind` values are append-only stable identifiers. Current classes:
+  - `micro_reward` — the quality tier ("red coin"): VI-scheduled, FLOW-gated,
+    rare and potent.
+  - `regularity_coin` — the volume tier ("yellow coin"): fixed-ratio on net
+    typed chars, gate-free, frequent and cheap. Channels that cannot map it
+    cheaply map it to **nothing** (the Intiface adapter does exactly that —
+    a frequent buzz would habituate the erogenous channel).
 
 **Tonic — `AmbientState`** (continuous, ~1 Hz):
 
@@ -66,7 +72,21 @@ class IOutputAdapter {
 
 Rules: non-blocking on the caller's thread; fail toward off/neutral.
 
-## 3. Hardware binding: Intiface (the only hardware path)
+## 3. In-editor binding: the coin channel (default reward path)
+
+The Notepad++ visual adapter delivers phasic intents as **coins**: a
+click-through, semi-transparent overlay sprite spawned ahead of the caret
+(≈ `coin_lead_seconds` of typing at the current rate, wrapped to the next
+line when it would pass the word-wrap edge), collected when typing reaches
+its document position. Collect = pop animation + reinforcing SFX (synth
+two-note coin ding for yellow, warmer chime + a floating affirmation from
+the INI list for red). Uncollected coins expire silently
+(`coin_expire_seconds`). Caret jumps and mouse clicks cannot collect — only
+typed advancement. Sound sources: writer-supplied
+`SkinnerBoxPP-sounds\coin_yellow.wav` / `coin_red.wav`, else synthesized
+bells (`src/adapters/sfx.*`); never a system alert sound.
+
+## 4. Hardware binding: Intiface (optional)
 
 `IntifaceAdapter` speaks Buttplug protocol v4 over a WebSocket to Intiface
 Central (`ws://127.0.0.1:12345` by default). Intiface owns all device/BLE
@@ -94,7 +114,7 @@ server-side):
   the server stops all devices itself.
 - Tonic state is never streamed to hardware — rewards are phasic only.
 
-## 4. Adding a channel — checklist
+## 5. Adding a channel — checklist
 
 1. Implement `IOutputAdapter`.
 2. Decide what each `kind` × dose range means for your channel. If the honest

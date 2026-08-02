@@ -18,10 +18,12 @@ src/
 ├── adapters/   host-agnostic output channels
 │   ├── log_adapter.*     metadata-only JSONL session log
 │   ├── raw_log.*         opt-in debug telemetry (typed text; experiment data)
-│   └── intiface_adapter.* Buttplug v4 WebSocket client — THE hardware channel
+│   ├── sfx.*             reinforcement SFX engine (synth bells, .wav override)
+│   └── intiface_adapter.* Buttplug v4 WebSocket client — optional hardware
 ├── plugin/     Notepad++-specific shell
 │   ├── plugin_main.cpp        plugin ABI, timer, INI config, log paths
-│   └── npp_visual_adapter.*   caret-line tint/bloom + status-bar meter
+│   ├── npp_visual_adapter.*   caret-line tint/bloom + status-bar meter
+│   └── coin_overlay.*         coin rewards: spawn-ahead / collect-by-typing
 test/
 ├── replay.cpp  replays a raw session log through the real engine
 └── demo.cpp    interactive console host: keystrokes → engine → Intiface
@@ -31,7 +33,8 @@ test/
 
 Everything the plugin does is this one sentence: **measure whether the writer
 is producing (momentum) and whether what they produce is writing (content
-entropy), and afford vibration rewards while both hold.**
+entropy), and afford rewards while both hold** — coins ahead of the caret by
+default, Intiface vibration as the optional hardware channel.
 
 The FSM (defined in `reward_intent.h`, implemented in ~10 lines in
 `estimator.cpp`):
@@ -41,10 +44,24 @@ The FSM (defined in `reward_intent.h`, implemented in ~10 lines in
 - `FLOW` — smoothed momentum score above threshold (hysteresis 0.70/0.50)
   **and** the content gate passes. The only state where rewards mature.
 
-The policy (in `policy.cpp`, one trigger): hold FLOW ≥ `min_flow_hold_s`,
-eligibility matures on an exponential hazard (`mean_reward_interval_s`),
-fires on the next actively-typing tick (idle < 1 s), hard `min_cooldown_s`
-floor between deliveries. Leaving FLOW forfeits eligibility.
+The policy (in `policy.cpp`) has two tiers, mirroring how a platformer
+prices coins:
+
+- **Quality ("red coin", `MicroReward`)** — hold FLOW ≥ `min_flow_hold_s`,
+  eligibility matures on an exponential hazard (`mean_reward_interval_s`),
+  fires on the next actively-typing tick (idle < 1 s), hard `min_cooldown_s`
+  floor. Leaving FLOW forfeits eligibility. The potent tier: gate required,
+  rare, carries the affirmation and (if enabled) the hardware buzz.
+- **Regularity ("yellow coin", `RegularityCoin`)** — fixed-ratio on net
+  typed chars (`coin_yellow_interval_chars`, default 250) while not IDLE.
+  Deliberately gate-free: it reinforces *producing at all*; the quality tier
+  reinforces *producing well*. Known trade: volume without the gate is
+  spoofable by filler (experiment 01) — accepted because the tier's payoff
+  is small and the potent tier stays gated.
+
+Delivery is the coin overlay (plugin side): the intent spawns a coin ahead
+of the caret and the reinforcing moment is the *collect*, which can only
+happen by typing into it.
 
 ## Boundaries that matter
 
@@ -83,8 +100,21 @@ reinvent it without new evidence:
 - **MCP hardware adapter + bespoke preset backend** — a second hardware
   interface with its own protocol and server. Intiface already owns device
   support; one hardware path only.
-- **Audio chime adapter** — sound interrupts reading; it was shipped
-  default-off and nothing missed it.
+- **Audio chime adapter (v1)** — cut as "sound interrupts reading", shipped
+  default-off, unmissed. **Partially reversed** by the coin channel's SFX on
+  new evidence: the v1 sound was a system alert (read as punishment) fired
+  at delivery time; the v2 sound is a game-like reinforcer fired at the
+  *collect* moment the writer produces by typing. The design record's real
+  lesson stands: never an aversive or interrupting sound — not "never
+  sound".
+- **Live GPT-2 LAB arm** — an in-plugin bridge to a Python torch host
+  streaming surprisal into the status bar. Removed after experiment 05: on a
+  real session the runtime's own char-entropy facet tracked judged quality
+  better than GPT-2 surprisal, and the fiction-anchored band misreads
+  ramble-genre work wholesale. GPT-2 remains an offline audit instrument
+  (`experiments/`); nothing model-shaped runs in-process. The removed
+  integration lives in git history (checkpoint commit before the pivot) if
+  new evidence ever justifies resurrecting it.
 
 ## Policy notes
 
@@ -94,18 +124,24 @@ Variable-interval, not variable-ratio: a ratio schedule on countable output
 actually in the target state," which reinforces *staying in the state* instead
 of *performing for the dispenser*.
 
-Delivery timing is contiguity-first: the buzz fires only while keys are
+Delivery timing is contiguity-first: the intent fires only while keys are
 actively moving. The first live test ran the opposite rule (fire in the next
 natural pause, inherited from "don't interrupt reading" visual-channel
 thinking) and the writer — typing continuously — got the buzz seconds after
 deliberately stopping, and immediately read it as "stopping pays." The
 machine's contingency is irrelevant; the perceived one is what conditions.
-Vibration doesn't interrupt typing, so it lands mid-behavior.
+
+The coin overlay strengthens the same property structurally: the payoff
+moment is the *collect*, and the only way to collect is to type to the
+coin's document position. Anticipation at spawn, reinforcement mid-behavior
+by construction, and an uncollected coin expires worthless — paying it out
+on return from a stall would reinforce the stall/return cycle (the same law
+that killed stall-recovery rewards).
 
 The hardware reward itself is an erogenous reinforcer, not a status buzz:
 enveloped (ease-in / sustain / ease-out), fixed peak under the cap, magnitude
 carried by sustain duration. Rationale and the external design review behind
-it are summarized in [output-contract.md](output-contract.md) §3.
+it are summarized in [output-contract.md](output-contract.md) §4.
 
 ## Quality measurement (design law)
 
@@ -119,36 +155,32 @@ measurement problem and it is handled **offline**:
    adversarial to the state the box is training. Preference shortcuts and
    in-editor quality prompts are out, not deferred.
 
-2. **GPT-2 is a lab instrument, not a runtime gate.** Surprisal numbers never
-   enter the reward policy. Two **mutually exclusive** lab arms in the plugin:
+2. **Model-shaped analysis is 100% offline.** Surprisal numbers never enter
+   the reward policy — and since the LAB-arm removal, never enter the
+   *process*. The plugin has exactly one lab switch: **REC** (Debug
+   telemetry), the raw per-event log **with typed text** that feeds the
+   offline audit. GPT-2 lives only in `experiments/` (venv, weights in the
+   local HF cache) as the audit instrument. Empirical basis:
+   experiment 02 (302 ms/window; fiction band needs per-user calibration)
+   and experiment 05 (char entropy out-correlated GPT-2 against judged
+   quality on a live session).
 
-   | arm | menu | what it does |
-   |---|---|---|
-   | REC | Debug telemetry | raw per-event log **with typed text** |
-   | LAB | Advanced debug | live GPT-2 mean bits/token + fiction-band distance on the 600-char typed window (stride ~300 / ≥5 s), status bar + session snapshots |
-
-   LAB talks to a long-lived **Python** host (torch GPT-2; same math as
-   `gpt2_lab.py`) over stdin/stdout JSON so a future native CPU binary can
-   drop in without plugin changes. Machine setup:
-   `tools\setup_lab.ps1` copies host scripts to
-   `%APPDATA%\Notepad++\plugins\config\SkinnerBoxPP-lab\` and pins
-   `[lab] python=` / `[lab] host=` in the INI to the experiments venv.
-   **GPT-2 weights are not shipped.** Arming LAB runs a local-cache check; if
-   the model is missing the plugin prompts once to download ~500 MB from
-   Hugging Face into the machine cache. Decline leaves LAB off. After that,
-   loads are `local_files_only` — no silent network.
-
-3. **Raw text stays local and opt-in.** REC is the text-capture arm; LAB only
-   keeps text in memory for scoring. Session text never ships with the repo
-   (`experiments/data/` is gitignored). Offline audit:
-   `experiments/audit_session.py` +
-   [experiment-02-quality-signals.md](experiment-02-quality-signals.md).
+3. **Raw text stays local and opt-in.** REC is the only text capture.
+   Session text never ships with the repo (`experiments/data/` is
+   gitignored). Offline audit: `experiments/audit_session.py` + the judge
+   rubric (`experiments/judge_rubric.md`) +
+   [experiment-05-live-session-audit.md](experiment-05-live-session-audit.md).
 
 Early chat-export brainstorms are not kept in-tree. Durable decisions live
 here, in the output contract, and in the experiment writeups.
 
 ## Open measurement (status)
 
-Quality correlation against external audits is the open problem. The
-candidate offline signals are GPT-2 surprisal band and POS-tag statistics;
-the char-bigram facet already closed the mash hole in the runtime gate.
+Quality correlation against external audits is the open problem. The first
+live audit (experiment 05) ran the full loop — REC → windows → two-lens
+LLM judges → correlate — and found the runtime's own char-entropy facet the
+best in-genre quality proxy so far (r ≈ +0.75, n = 7). The retrospective is
+now repeatable (versioned rubric, accumulate packets per session); the
+missing telemetry for the next round is coin lifecycle events
+(spawn/collect/expire) to verify collect-contiguity, and caret-jump events
+to separate drafting from editing passes.

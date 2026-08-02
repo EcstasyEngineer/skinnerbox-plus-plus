@@ -11,13 +11,21 @@
 
 namespace sbpp {
 
-// Decides WHEN a reward happens, never what it physically is. One trigger:
-// while the FSM is in FLOW (held for at least min_flow_hold_s), reward
-// eligibility matures under an exponential hazard with the configured mean
-// interval. When mature, the reward fires on the next tick where the writer
-// is actively typing (idle < 1 s), subject to the hard cooldown — the
-// reinforcer lands during the behavior, never in the pause after it.
-// Leaving FLOW forfeits eligibility and the hold clock.
+// Decides WHEN a reward happens, never what it physically is. Two triggers:
+//
+// Quality tier ("red coin", MicroReward): while the FSM is in FLOW (held for
+// at least min_flow_hold_s), reward eligibility matures under an exponential
+// hazard with the configured mean interval. When mature, the reward fires on
+// the next tick where the writer is actively typing (idle < 1 s), subject to
+// the hard cooldown — the reinforcer lands during the behavior, never in the
+// pause after it. Leaving FLOW forfeits eligibility and the hold clock.
+//
+// Regularity tier ("yellow coin", RegularityCoin): every
+// coin_yellow_interval_chars net typed chars while not IDLE. Fixed-ratio on
+// production volume, deliberately gate-free: it reinforces producing at all,
+// while the quality tier reinforces producing WELL. Known limitation: volume
+// without the gate is spoofable by filler (experiment-01); the yellow tier
+// accepts that because its dose is small and the potent tier stays gated.
 class RewardPolicy {
 public:
     RewardPolicy(const Config& cfg, uint64_t seed) : cfg_(cfg), rng_(seed) {}
@@ -35,6 +43,8 @@ private:
     double flow_entered_s_ = -1.0;  // when the current FLOW stretch began
     bool eligible_ = false;         // VI timer has matured, awaiting boundary
     double last_delivery_s_ = -1e9;
+    uint64_t yellow_marker_chars_ = 0; // typed-chars watermark of the last
+                                       // regularity coin
 };
 
 } // namespace sbpp

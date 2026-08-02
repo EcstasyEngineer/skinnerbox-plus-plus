@@ -7,7 +7,9 @@
 #include <cstdio>
 
 #include "../adapters/intiface_adapter.h"
+#include "../adapters/sfx.h"
 #include "../npp/Scintilla.h"
+#include "coin_overlay.h"
 
 namespace sbpp {
 
@@ -37,8 +39,16 @@ void warm_target(COLORREF base, BYTE& r, BYTE& g, BYTE& b) {
 } // namespace
 
 NppVisualAdapter::NppVisualAdapter(const NppData& npp, const Config& cfg,
-                                   const IntifaceAdapter* hw)
+                                   const IntifaceAdapter* hw,
+                                   const std::wstring& sounds_dir,
+                                   std::vector<std::wstring> affirmations)
     : npp_(npp), cfg_(cfg), hw_(hw) {
+    if (cfg_.coins_enabled) {
+        if (cfg_.coin_sound) sfx_ = std::make_unique<Sfx>(sounds_dir);
+        coins_ = std::make_unique<CoinOverlay>(npp_, cfg_,
+                                               std::move(affirmations),
+                                               sfx_.get());
+    }
     base_color_ = static_cast<COLORREF>(
         SendMessage(npp_._scintillaMainHandle, SCI_GETCARETLINEBACK, 0, 0));
     base_caretline_visible_ = static_cast<int>(
@@ -66,8 +76,7 @@ void NppVisualAdapter::set_statusbar(const AmbientState& s) {
     } else {
         swprintf(hw, 48, L"hw DISCONNECTED");
     }
-    const char* mode =
-        cfg_.advanced_debug ? "LAB  " : (cfg_.debug_telemetry ? "REC  " : "");
+    const char* mode = cfg_.debug_telemetry ? "REC  " : "";
     wchar_t text[256];
     if (GetTickCount64() < message_until_ms_ && !message_.empty()) {
         // A reward happened: say what and why, in words, where the eye can
@@ -81,21 +90,9 @@ void NppVisualAdapter::set_statusbar(const AmbientState& s) {
         if (!s.gate_ok)
             snprintf(gate, sizeof(gate), " (%s)",
                      s.gate_fail && s.gate_fail[0] ? s.gate_fail : "gate x");
-        if (cfg_.advanced_debug && s.gpt2_ready) {
-            swprintf(text, 256,
-                     L"%hs%.2f %hs%hs · gpt2 %.1fb d=%.1f · out %.2f · %s",
-                     mode, s.flow, regime_name(s.regime), gate,
-                     s.gpt2_mean_bits, s.gpt2_band_dist,
-                     hw_ ? hw_->current_output() : 0.0, hw);
-        } else if (cfg_.advanced_debug) {
-            swprintf(text, 256, L"%hs%.2f %hs%hs · gpt2 … · out %.2f · %s",
-                     mode, s.flow, regime_name(s.regime), gate,
-                     hw_ ? hw_->current_output() : 0.0, hw);
-        } else {
-            swprintf(text, 256, L"%hs%.2f %hs%hs · out %.2f · %s",
-                     mode, s.flow, regime_name(s.regime), gate,
-                     hw_ ? hw_->current_output() : 0.0, hw);
-        }
+        swprintf(text, 256, L"%hs%.2f %hs%hs · out %.2f · %s",
+                 mode, s.flow, regime_name(s.regime), gate,
+                 hw_ ? hw_->current_output() : 0.0, hw);
     }
     if (last_status_ == text) return;
     last_status_ = text;
@@ -104,6 +101,8 @@ void NppVisualAdapter::set_statusbar(const AmbientState& s) {
 }
 
 void NppVisualAdapter::ambient(const AmbientState& s) {
+    last_cpm_ = s.net_rate_cpm;
+    if (coins_) coins_->tick();
     const bool blooming = GetTickCount64() < bloom_until_ms_;
     if (cfg_.visual_enabled) {
         BYTE wr, wg, wb;
@@ -123,6 +122,11 @@ void NppVisualAdapter::ambient(const AmbientState& s) {
 
 void NppVisualAdapter::deliver(const RewardIntent& intent) {
     const unsigned long long now = GetTickCount64();
+    if (coins_) coins_->spawn(intent.kind, last_cpm_);
+    // The regularity tier is coin-only: no bloom, no status message — small
+    // and frequent must stay small. The quality tier keeps the full phasic
+    // treatment (bloom + explained message + its coin).
+    if (intent.kind == RewardClass::RegularityCoin) return;
     // Bloom duration is visual-channel config, not policy intent duration
     // (intent.max_duration_ms is an abstract ceiling for logs/other adapters).
     bloom_until_ms_ = now + cfg_.bloom_ms;
@@ -132,10 +136,23 @@ void NppVisualAdapter::deliver(const RewardIntent& intent) {
         case RewardClass::MicroReward:
             message_ = L"held flow — good stretch";
             break;
+        case RewardClass::RegularityCoin:
+            break; // unreachable; handled above
     }
 }
 
+void NppVisualAdapter::on_typed_to(long long caret_pos) {
+    if (coins_) coins_->on_typed_to(caret_pos);
+}
+
+void NppVisualAdapter::on_buffer_switch() {
+    if (coins_) coins_->cancel_pending();
+}
+
+NppVisualAdapter::~NppVisualAdapter() = default;
+
 void NppVisualAdapter::shutdown() {
+    if (coins_) coins_->shutdown();
     apply_color(base_color_);
     SendMessage(npp_._scintillaMainHandle, SCI_SETCARETLINEVISIBLE,
                 base_caretline_visible_, 0);
